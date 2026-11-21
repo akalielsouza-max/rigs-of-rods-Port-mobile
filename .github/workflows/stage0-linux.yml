@@ -51,7 +51,7 @@ jobs:
           git clone --depth 1 https://github.com/RigsOfRods/ogre-caelum.git && (cd ogre-caelum && cmake -DCMAKE_BUILD_TYPE=Release -DCaelum_BUILD_SAMPLES=FALSE -DINSTALL_OGRE_PLUGIN=OFF . && make -j"$(nproc)" && sudo make install)
           git clone --depth 1 https://github.com/RigsOfRods/ogre-pagedgeometry.git && (cd ogre-pagedgeometry && cmake -DCMAKE_BUILD_TYPE=Release . && make -j"$(nproc)" && sudo make install)
           git clone https://github.com/RigsOfRods/socketw.git && (cd socketw && cmake -DCMAKE_BUILD_TYPE=Release . && make -j"$(nproc)" && sudo make install)
-          git clone --depth 1 https://github.com/AnotherFoxGuy/angelscript.git && (cd angelscript && cmake -DCMAKE_BUILD_TYPE=Release . && make -j"$(nproc)" && sudo make install)
+          git clone --depth 1 --branch 2.35.1 https://github.com/AnotherFoxGuy/angelscript.git && (cd angelscript && cmake -DCMAKE_BUILD_TYPE=Release . && make -j"$(nproc)" && sudo make install)
 
       - name: Build Rigs of Rods
         working-directory: ror
