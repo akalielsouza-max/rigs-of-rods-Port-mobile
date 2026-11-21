@@ -84,7 +84,9 @@ jobs:
           list(APPEND srcs ${GEN}/RoRVersion.cpp)
           add_library(RoR SHARED ${srcs})
           target_include_directories(RoR PRIVATE ${RoR_INCS})
-          target_include_directories(RoR AFTER PRIVATE ${SYS_INCS})
+          foreach(d ${SYS_INCS})
+            target_compile_options(RoR PRIVATE "SHELL:-idirafter ${d}")
+          endforeach()
           target_compile_definitions(RoR PRIVATE USE_OPENAL USE_SOCKETW USE_ANGELSCRIPT AS_USE_NAMESPACE USE_CURL USE_CAELUM USE_PAGED
             _LIBCPP_ENABLE_CXX17_REMOVED_AUTO_PTR _LIBCPP_ENABLE_CXX17_REMOVED_UNARY_BINARY_FUNCTION)
           target_compile_options(RoR PRIVATE "SHELL:-include ${SRC}/source/main/pch.h" -O0 -g0 -Wno-everything)
@@ -97,7 +99,7 @@ jobs:
 
       - name: Compilar e ligar (continua apos erros)
         run: |
-          cmake --build build-link -j"$(nproc)" -- -k > build-link.log 2>&1 || true
+          cmake --build build-link -j"$(nproc)" -- -k -Otarget > build-link.log 2>&1 || true
           tail -3 build-link.log
           ls -la build-link/*.so 2>/dev/null || echo "libRoR.so NAO foi gerada (esperado no primeiro teste)"
 
