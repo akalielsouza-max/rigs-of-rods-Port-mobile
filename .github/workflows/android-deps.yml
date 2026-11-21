@@ -1,131 +1,260 @@
-# STAGE 2a - Varredura de compatibilidade do codigo do Rigs of Rods 2026.01 para Android arm64.
-# NAO gera APK nem executavel. Roda clang -fsyntax-only em cada .cpp de source/main usando o sysroot
-# do workflow android-deps e mostra quais modulos compilam e quais erros aparecem.
-# EXPERIMENTAL / NAO TESTADO. Execute ANTES o android-deps (ele salva o cache android-sysroot-v1).
-# Resultado vermelho nao acontece: o relatorio e a informacao. Leia o passo "Relatorio".
-name: android-core
+# STAGE 1b - Dependencias do Rigs of Rods 2026.01 para Android arm64-v8a (NDK r26d).
+# EXPERIMENTAL / NAO TESTADO. Cada dependencia e um passo separado com continue-on-error:
+# o ultimo passo imprime uma tabela OK/FALHOU para saber exatamente o que quebrou.
+# Versoes seguem o conanfile.py da tag 2026.01. OIS nao entra: nao tem backend Android.
+name: android-deps
 on:
   workflow_dispatch:
-    inputs:
-      ror_ref:
-        description: "Tag/commit do Rigs of Rods"
-        default: "2026.01"
 jobs:
-  sweep:
+  deps:
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 240
     steps:
-      - name: Instalar NDK r26d
+      - name: Instalar NDK r26d e definir variaveis
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;26.3.11579264" > /dev/null
-          echo "NDK_DIR=$ANDROID_HOME/ndk/26.3.11579264" >> "$GITHUB_ENV"
-          echo "PREFIX=$GITHUB_WORKSPACE/sysroot" >> "$GITHUB_ENV"
-          echo "CXX=$ANDROID_HOME/ndk/26.3.11579264/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang++" >> "$GITHUB_ENV"
+          NDK_DIR="$ANDROID_HOME/ndk/26.3.11579264"
+          PREFIX="$GITHUB_WORKSPACE/sysroot"
+          mkdir -p "$PREFIX"
+          echo "NDK_DIR=$NDK_DIR" >> "$GITHUB_ENV"
+          echo "PREFIX=$PREFIX" >> "$GITHUB_ENV"
+          echo "CMAKE_TC=-DCMAKE_TOOLCHAIN_FILE=$NDK_DIR/build/cmake/android.toolchain.cmake -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-26 -DANDROID_STL=c++_shared -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$PREFIX -DCMAKE_PREFIX_PATH=$PREFIX -DCMAKE_FIND_ROOT_PATH=$PREFIX -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DCMAKE_POLICY_VERSION_MINIMUM=3.5" >> "$GITHUB_ENV"
+          cat "$NDK_DIR/source.properties"
+          touch "$GITHUB_WORKSPACE/status.txt"
 
-      - name: Restaurar sysroot (cache do android-deps)
-        id: sysroot
+      # ---------- OGRE (obrigatorio; com cache porque demora) ----------
+      - name: Restaurar cache do OGRE
+        id: ogre-cache
         uses: actions/cache/restore@v4
+        with:
+          path: sysroot
+          key: ogre-1.11.6-ndk26d-zzip72-v1
+
+      - name: Build OGRE 1.11.6 (GLES2, estatico)
+        if: steps.ogre-cache.outputs.cache-hit != 'true'
+        run: |
+          set -eo pipefail
+          git clone --depth 1 --branch v1.11.6 https://github.com/OGRECave/ogre.git
+          sed -i 's#archive/develop.zip#archive/refs/tags/v0.13.72.zip#; s#zziplib-develop#zziplib-0.13.72#g; s#-DZZIPCOMPAT=OFF#-DZZIP_COMPAT=OFF -DZZIP_LIBTOOL=OFF -DZZIP_PKGCONFIG=OFF#' ogre/CMake/Dependencies.cmake
+          for pass in 1 2; do
+            cmake -S ogre -B build-ogre -G "Unix Makefiles" $CMAKE_TC \
+              -DOGRE_STATIC=ON -DOGRE_BUILD_DEPENDENCIES=ON \
+              -DOGRE_BUILD_RENDERSYSTEM_GLES2=ON -DOGRE_BUILD_RENDERSYSTEM_GL=OFF -DOGRE_BUILD_RENDERSYSTEM_GL3PLUS=OFF \
+              -DOGRE_BUILD_SAMPLES=OFF -DOGRE_BUILD_TOOLS=OFF -DOGRE_BUILD_TESTS=OFF \
+              -DOGRE_BUILD_COMPONENT_HLMS=OFF -DOGRE_BUILD_COMPONENT_VOLUME=OFF \
+              -DOGRE_BUILD_COMPONENT_PYTHON=OFF -DOGRE_BUILD_COMPONENT_JAVA=OFF -DOGRE_BUILD_COMPONENT_CSHARP=OFF \
+              -DOGRE_BUILD_PLUGIN_BSP=OFF -DOGRE_BUILD_PLUGIN_PCZ=OFF -DOGRE_BUILD_PLUGIN_CG=OFF
+          done
+          grep -q "OGRE_CONFIG_ENABLE_ZIP:BOOL=ON" build-ogre/CMakeCache.txt
+          cmake --build build-ogre -j"$(nproc)"
+          cmake --install build-ogre
+          cp -rn build-ogre/Dependencies/* "$PREFIX"/ || true
+
+      - name: Salvar cache do OGRE
+        if: steps.ogre-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: sysroot
+          key: ogre-1.11.6-ndk26d-zzip72-v1
+
+      - name: Localizar OGREConfig.cmake
+        run: |
+          f="$(find "$PREFIX" -name OGREConfig.cmake | head -1)"
+          echo "OGREConfig: $f"
+          test -n "$f"
+          echo "OGRE_CMAKE_DIR=$(dirname "$f")" >> "$GITHUB_ENV"
+          echo "ogre" >> status.txt
+
+      # ---------- Dependencias simples ----------
+      - name: fmt 10.1.1
+        continue-on-error: true
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/logs"
+          exec > >(tee -a "$GITHUB_WORKSPACE/logs/fmt.log") 2>&1
+          set -eo pipefail
+          git clone --depth 1 --branch 10.1.1 https://github.com/fmtlib/fmt.git
+          cmake -S fmt -B b-fmt $CMAKE_TC -DFMT_TEST=OFF -DFMT_DOC=OFF
+          cmake --build b-fmt -j"$(nproc)" && cmake --install b-fmt
+          echo "fmt" >> status.txt
+
+      - name: RapidJSON (somente cabecalhos)
+        continue-on-error: true
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/logs"
+          exec > >(tee -a "$GITHUB_WORKSPACE/logs/rapidjson.log") 2>&1
+          set -eo pipefail
+          git clone --depth 1 --branch v1.1.0 https://github.com/Tencent/rapidjson.git
+          cmake -S rapidjson -B b-rj $CMAKE_TC -DRAPIDJSON_BUILD_TESTS=OFF -DRAPIDJSON_BUILD_DOC=OFF -DRAPIDJSON_BUILD_EXAMPLES=OFF
+          cmake --install b-rj
+          echo "rapidjson" >> status.txt
+
+      - name: AngelScript 2.35.1
+        continue-on-error: true
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/logs"
+          exec > >(tee -a "$GITHUB_WORKSPACE/logs/angelscript.log") 2>&1
+          set -eo pipefail
+          git clone --depth 1 --branch 2.35.1 https://github.com/AnotherFoxGuy/angelscript.git
+          cmake -S angelscript -B b-as $CMAKE_TC -DBUILD_SHARED_LIBS=OFF
+          cmake --build b-as -j"$(nproc)" && cmake --install b-as
+          echo "angelscript" >> status.txt
+
+      - name: OpenAL Soft 1.22.2 (OpenSL ES)
+        continue-on-error: true
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/logs"
+          exec > >(tee -a "$GITHUB_WORKSPACE/logs/openal.log") 2>&1
+          set -eo pipefail
+          git clone --depth 1 --branch 1.22.2 https://github.com/kcat/openal-soft.git
+          cmake -S openal-soft -B b-al $CMAKE_TC -DLIBTYPE=STATIC -DALSOFT_UTILS=OFF -DALSOFT_EXAMPLES=OFF -DALSOFT_TESTS=OFF \
+            -DALSOFT_INSTALL_EXAMPLES=OFF -DALSOFT_INSTALL_UTILS=OFF -DALSOFT_BACKEND_OPENSL=ON
+          cmake --build b-al -j"$(nproc)" && cmake --install b-al
+          echo "openal" >> status.txt
+
+      # ---------- Rede ----------
+      - name: OpenSSL 3.1.2
+        continue-on-error: true
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/logs"
+          exec > >(tee -a "$GITHUB_WORKSPACE/logs/openssl.log") 2>&1
+          set -eo pipefail
+          git clone --depth 1 --branch openssl-3.1.2 https://github.com/openssl/openssl.git
+          cd openssl
+          export ANDROID_NDK_ROOT="$NDK_DIR"
+          export PATH="$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
+          ./Configure android-arm64 -D__ANDROID_API__=26 no-shared no-tests --prefix="$PREFIX" --libdir=lib
+          make -j"$(nproc)"
+          make install_sw
+          echo "openssl" >> "$GITHUB_WORKSPACE/status.txt"
+
+      - name: libcurl 8.2.1
+        continue-on-error: true
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/logs"
+          exec > >(tee -a "$GITHUB_WORKSPACE/logs/curl.log") 2>&1
+          set -eo pipefail
+          git clone --depth 1 --branch curl-8_2_1 https://github.com/curl/curl.git
+          cmake -S curl -B b-curl $CMAKE_TC -DBUILD_SHARED_LIBS=OFF -DBUILD_CURL_EXE=OFF -DBUILD_TESTING=OFF \
+            -DCMAKE_USE_OPENSSL=ON -DOPENSSL_ROOT_DIR="$PREFIX" -DOPENSSL_USE_STATIC_LIBS=TRUE \
+            -DCURL_DISABLE_LDAP=ON -DUSE_LIBIDN2=OFF -DCURL_USE_LIBPSL=OFF -DCURL_USE_LIBSSH2=OFF
+          cmake --build b-curl -j"$(nproc)" && cmake --install b-curl
+          echo "curl" >> status.txt
+
+      - name: SocketW 3.11.0
+        continue-on-error: true
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/logs"
+          exec > >(tee -a "$GITHUB_WORKSPACE/logs/socketw.log") 2>&1
+          set -eo pipefail
+          git clone --depth 1 --branch 3.11.0 https://github.com/RigsOfRods/socketw.git
+          cmake -S socketw -B b-sw $CMAKE_TC -DOPENSSL_ROOT_DIR="$PREFIX" -DBUILD_SHARED_LIBS=OFF
+          cmake --build b-sw -j"$(nproc)" && cmake --install b-sw
+          echo "socketw" >> status.txt
+
+      # ---------- Dependem do OGRE ----------
+      - name: MyGUI 3.4.0 (render system OGRE, estatico)
+        continue-on-error: true
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/logs"
+          exec > >(tee -a "$GITHUB_WORKSPACE/logs/mygui.log") 2>&1
+          set -eo pipefail
+          git clone --depth 1 --branch MyGUI3.4.0 https://github.com/MyGUI/mygui.git
+          cmake -S mygui -B b-mygui $CMAKE_TC -DOGRE_DIR="$OGRE_CMAKE_DIR" -DMYGUI_RENDERSYSTEM=3 -DMYGUI_STATIC=ON \
+            -DMYGUI_BUILD_DEMOS=OFF -DMYGUI_BUILD_TOOLS=OFF -DMYGUI_BUILD_PLUGINS=OFF -DMYGUI_BUILD_DOCS=OFF \
+            -DMYGUI_BUILD_TEST_APP=OFF -DMYGUI_DONT_USE_OBSOLETE=ON
+          cmake --build b-mygui -j"$(nproc)" && cmake --install b-mygui
+          echo "mygui" >> status.txt
+
+      - name: Caelum (master do RigsOfRods, CMake proprio para Android)
+        continue-on-error: true
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/logs"
+          exec > >(tee -a "$GITHUB_WORKSPACE/logs/caelum.log") 2>&1
+          set -eo pipefail
+          git clone --depth 1 https://github.com/RigsOfRods/ogre-caelum.git
+          git -C ogre-caelum rev-parse HEAD | tee caelum-commit.txt
+          mkdir -p custom-caelum
+          cat > custom-caelum/CMakeLists.txt <<'CMK'
+          cmake_minimum_required(VERSION 3.10)
+          project(CaelumAndroid CXX)
+          set(CMAKE_CXX_STANDARD 11)
+          set(LIB_MAJOR_VERSION 0)
+          set(LIB_MINOR_VERSION 6)
+          set(LIB_BUILD_VERSION 3)
+          set(CAELUM_SCRIPT_SUPPORT 1)
+          configure_file(${SRC}/main/include/CaelumConfig.h.in ${CMAKE_BINARY_DIR}/gen/CaelumConfig.h)
+          file(GLOB srcs ${SRC}/main/src/*.cpp)
+          add_library(Caelum STATIC ${srcs})
+          target_compile_definitions(Caelum PRIVATE CAELUM_LIB)
+          file(GLOB ogre_sub LIST_DIRECTORIES true ${OGRE_INC}/*)
+          target_include_directories(Caelum PRIVATE ${SRC}/main/include ${CMAKE_BINARY_DIR}/gen ${OGRE_INC} ${ogre_sub})
+          install(TARGETS Caelum ARCHIVE DESTINATION lib)
+          install(DIRECTORY ${SRC}/main/include/ DESTINATION include/Caelum FILES_MATCHING PATTERN "*.h")
+          install(FILES ${CMAKE_BINARY_DIR}/gen/CaelumConfig.h DESTINATION include/Caelum)
+          CMK
+          cmake -S custom-caelum -B b-caelum $CMAKE_TC -DSRC="$PWD/ogre-caelum" -DOGRE_INC="$PREFIX/include/OGRE"
+          cmake --build b-caelum -j"$(nproc)" && cmake --install b-caelum
+          echo "caelum" >> status.txt
+      - name: PagedGeometry 1.2.0 (CMake proprio para Android)
+        continue-on-error: true
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/logs"
+          exec > >(tee -a "$GITHUB_WORKSPACE/logs/pagedgeometry.log") 2>&1
+          set -eo pipefail
+          git clone --depth 1 --branch v1.2.0 https://github.com/RigsOfRods/ogre-pagedgeometry.git
+          mkdir -p custom-pg
+          cat > custom-pg/CMakeLists.txt <<'CMK'
+          cmake_minimum_required(VERSION 3.10)
+          project(PagedGeometryAndroid CXX)
+          set(CMAKE_CXX_STANDARD 11)
+          set(LIB_MAJOR_VERSION 1)
+          set(LIB_MINOR_VERSION 2)
+          set(LIB_BUILD_VERSION 0)
+          set(LIB_VERSION "1.2.0")
+          configure_file(${SRC}/include/PagedGeometryConfig.h.in ${CMAKE_BINARY_DIR}/gen/PagedGeometryConfig.h)
+          file(GLOB srcs ${SRC}/source/*.cpp)
+          add_library(PagedGeometry STATIC ${srcs})
+          file(GLOB ogre_sub LIST_DIRECTORIES true ${OGRE_INC}/*)
+          target_include_directories(PagedGeometry PRIVATE ${SRC}/include ${CMAKE_BINARY_DIR}/gen ${OGRE_INC} ${ogre_sub})
+          install(TARGETS PagedGeometry ARCHIVE DESTINATION lib)
+          install(DIRECTORY ${SRC}/include/ DESTINATION include/PagedGeometry FILES_MATCHING PATTERN "*.h")
+          install(FILES ${CMAKE_BINARY_DIR}/gen/PagedGeometryConfig.h DESTINATION include/PagedGeometry)
+          CMK
+          cmake -S custom-pg -B b-pg $CMAKE_TC -DSRC="$PWD/ogre-pagedgeometry" -DOGRE_INC="$PREFIX/include/OGRE"
+          cmake --build b-pg -j"$(nproc)" && cmake --install b-pg
+          echo "pagedgeometry" >> status.txt
+      - name: Resumo das dependencias
+        if: always()
+        run: |
+          echo "=============== RESUMO ==============="
+          fail=0
+          for d in ogre fmt rapidjson angelscript openal openssl curl socketw mygui caelum pagedgeometry; do
+            if grep -qx "$d" status.txt; then echo "OK      $d"; else echo "FALHOU  $d"; fail=1; fi
+          done
+          for d in openssl curl caelum pagedgeometry mygui socketw angelscript openal fmt rapidjson; do
+            if ! grep -qx "$d" status.txt && [ -f "logs/$d.log" ]; then
+              echo; echo "######## ERROS DE $d ########"
+              grep -a -n -E "error|Error|ERROR|not found|No such|fatal|CMake Error" "logs/$d.log" | head -25 | cut -c1-300
+              echo "--- ultimas linhas ---"; tail -8 "logs/$d.log" | cut -c1-300
+            fi
+          done
+          echo "OIS: nao compilado de proposito (sem backend Android; sera trocado por camada de entrada por toque)"
+          echo "======================================"
+          exit $fail
+
+      - name: Salvar sysroot completo em cache (para o android-core)
+        if: success()
+        uses: actions/cache/save@v4
         with:
           path: sysroot
           key: android-sysroot-v1
 
-      - name: Verificar sysroot
-        run: |
-          if [ "${{ steps.sysroot.outputs.cache-hit }}" != "true" ]; then
-            echo "ERRO: cache android-sysroot-v1 nao encontrado. Rode o workflow android-deps ate o fim (todas as dependencias OK) e tente de novo."
-            exit 1
-          fi
-          ls sysroot/include | head -30
-
-      - uses: actions/checkout@v4
-        with:
-          repository: RigsOfRods/rigs-of-rods
-          ref: ${{ inputs.ror_ref }}
-          path: ror
-
-      - name: Cabecalhos do OIS (so para checar a sintaxe; nao compilamos o OIS)
-        continue-on-error: true
-        run: |
-          git clone --depth 1 --branch v1.4 https://github.com/wgois/OIS.git ois
-          ls ois/includes | head
-
-      - name: Gerar RoRVersionDef.h e montar flags
-        run: |
-          mkdir -p gen
-          sed -e 's/@VERSION_YEAR@/2026/g' -e 's/@VERSION_MONTH@/01/g' -e 's/@VERSION_SUFFIX@//g' \
-            ror/source/version_info/RoRVersionDef.h.in > gen/RoRVersionDef.h
-          {
-            echo "-std=c++17 -DUSE_OPENAL -DUSE_SOCKETW -DUSE_ANGELSCRIPT -DAS_USE_NAMESPACE -DUSE_CURL -DUSE_CAELUM -DUSE_PAGED -DUSE_MUMBLE"
-            echo "-include ror/source/main/pch.h -Wno-everything"
-            echo "-Igen -Iror/source/version_info -Iror/external/header_only -Iror/external/angelscript_addons"
-            for d in $(find ror/source/main -type d); do echo "-I$d"; done
-            [ -d ois/includes ] && echo "-Iois/includes"
-            echo "-isystem $PREFIX/include"
-            for d in $(find "$PREFIX/include" -mindepth 1 -maxdepth 2 -type d); do echo "-isystem $d"; done
-          } | tr '\n' ' ' > flags.txt
-          wc -w flags.txt
-
-      - name: Varredura e relatorio (clang -fsyntax-only)
-        run: |
-          cat > sweep.py <<'PY'
-          #!/usr/bin/env python3
-          """Varredura de compatibilidade: roda clang -fsyntax-only em cada .cpp de source/main
-          e gera um relatorio por modulo + os erros mais comuns. Nao gera codigo, so diagnostica."""
-          import subprocess, os, glob, re, sys, collections, concurrent.futures as cf
-
-          cxx = os.environ["CXX"]
-          flags = open("flags.txt").read().split()
-          root = sys.argv[1] if len(sys.argv) > 1 else "ror/source/main"
-          outdir = "results"; os.makedirs(outdir, exist_ok=True)
-          srcs = sorted(glob.glob(root + "/**/*.cpp", recursive=True))
-
-          def run(f):
-              p = subprocess.run([cxx] + flags + ["-fsyntax-only", "-ferror-limit=5", f],
-                                 capture_output=True, text=True)
-              return f, p.returncode, p.stderr
-
-          res = []
-          with cf.ThreadPoolExecutor(max_workers=os.cpu_count() or 2) as ex:
-              for r in ex.map(run, srcs):
-                  res.append(r)
-
-          def module(f):
-              rel = os.path.relpath(f, root)
-              return rel.split(os.sep)[0] if os.sep in rel else "(raiz)"
-
-          mods = collections.OrderedDict()
-          msgs = collections.Counter(); headers = collections.Counter()
-          for f, rc, err in res:
-              m = module(f); d = mods.setdefault(m, [0, 0]); d[0 if rc == 0 else 1] += 1
-              open(os.path.join(outdir, os.path.relpath(f, root).replace(os.sep, "__") + ".log"), "w").write(err)
-              for line in err.splitlines():
-                  h = re.search(r"fatal error: '([^']+)' file not found", line)
-                  if h: headers[h.group(1)] += 1
-                  e = re.search(r"error: (.*)", line)
-                  if e and not h:
-                      msgs[re.sub(r"'[^']*'", "'X'", e.group(1))[:140]] += 1
-
-          ok = sum(1 for _, rc, _ in res if rc == 0)
-          lines = ["# Relatorio de varredura (clang -fsyntax-only, arm64 Android)", "",
-                   f"Arquivos: {len(res)} | compilam: {ok} | falham: {len(res)-ok}", "",
-                   "| Modulo | OK | FALHA |", "|---|---|---|"]
-          for m, (a, b) in sorted(mods.items()):
-              lines.append(f"| {m} | {a} | {b} |")
-          lines += ["", "## Cabecalhos nao encontrados (top 20)"]
-          lines += [f"- {c}x `{h}`" for h, c in headers.most_common(20)] or ["- nenhum"]
-          lines += ["", "## Mensagens de erro mais comuns (top 20)"]
-          lines += [f"- {c}x {m}" for m, c in msgs.most_common(20)] or ["- nenhuma"]
-          lines += ["", "## Arquivos que falham (primeiros 60)"]
-          lines += [f"- {os.path.relpath(f, root)}" for f, rc, _ in res if rc != 0][:60]
-          open(os.path.join(outdir, "REPORT.md"), "w").write("\n".join(lines) + "\n")
-          print("\n".join(lines))
-          PY
-          python3 sweep.py ror/source/main | tee report.txt
-          cp results/REPORT.md "$GITHUB_STEP_SUMMARY"
-
+      - name: Empacotar sysroot
+        if: always()
+        run: tar -czf sysroot-android-arm64.tar.gz sysroot status.txt logs $(ls caelum-commit.txt 2>/dev/null)
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: sweep-results
-          path: results
+          name: android-sysroot-arm64
+          path: sysroot-android-arm64.tar.gz
           
