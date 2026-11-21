@@ -74,7 +74,8 @@ jobs:
           set -eo pipefail
           git clone --depth 1 --branch 10.1.1 https://github.com/fmtlib/fmt.git
           cmake -S fmt -B b-fmt $CMAKE_TC -DFMT_TEST=OFF -DFMT_DOC=OFF
-          cmake --build b-fmt -j"$(nproc)" && cmake --install b-fmt
+          cmake --build b-fmt -j"$(nproc)"
+          cmake --install b-fmt
           echo "fmt" >> status.txt
 
       - name: RapidJSON (somente cabecalhos)
@@ -96,7 +97,8 @@ jobs:
           set -eo pipefail
           git clone --depth 1 --branch 2.35.1 https://github.com/AnotherFoxGuy/angelscript.git
           cmake -S angelscript -B b-as $CMAKE_TC -DBUILD_SHARED_LIBS=OFF
-          cmake --build b-as -j"$(nproc)" && cmake --install b-as
+          cmake --build b-as -j"$(nproc)"
+          cmake --install b-as
           echo "angelscript" >> status.txt
 
       - name: OpenAL Soft 1.22.2 (OpenSL ES)
@@ -108,7 +110,8 @@ jobs:
           git clone --depth 1 --branch 1.22.2 https://github.com/kcat/openal-soft.git
           cmake -S openal-soft -B b-al $CMAKE_TC -DLIBTYPE=STATIC -DALSOFT_UTILS=OFF -DALSOFT_EXAMPLES=OFF -DALSOFT_TESTS=OFF \
             -DALSOFT_INSTALL_EXAMPLES=OFF -DALSOFT_INSTALL_UTILS=OFF -DALSOFT_BACKEND_OPENSL=ON
-          cmake --build b-al -j"$(nproc)" && cmake --install b-al
+          cmake --build b-al -j"$(nproc)"
+          cmake --install b-al
           echo "openal" >> status.txt
 
       # ---------- Rede ----------
@@ -137,7 +140,8 @@ jobs:
           cmake -S curl -B b-curl $CMAKE_TC -DBUILD_SHARED_LIBS=OFF -DBUILD_CURL_EXE=OFF -DBUILD_TESTING=OFF \
             -DCMAKE_USE_OPENSSL=ON -DOPENSSL_ROOT_DIR="$PREFIX" -DOPENSSL_USE_STATIC_LIBS=TRUE \
             -DCURL_DISABLE_LDAP=ON -DUSE_LIBIDN2=OFF -DCURL_USE_LIBPSL=OFF -DCURL_USE_LIBSSH2=OFF
-          cmake --build b-curl -j"$(nproc)" && cmake --install b-curl
+          cmake --build b-curl -j"$(nproc)"
+          cmake --install b-curl
           echo "curl" >> status.txt
 
       - name: SocketW 3.11.0
@@ -148,7 +152,8 @@ jobs:
           set -eo pipefail
           git clone --depth 1 --branch 3.11.0 https://github.com/RigsOfRods/socketw.git
           cmake -S socketw -B b-sw $CMAKE_TC -DOPENSSL_ROOT_DIR="$PREFIX" -DBUILD_SHARED_LIBS=OFF
-          cmake --build b-sw -j"$(nproc)" && cmake --install b-sw
+          cmake --build b-sw -j"$(nproc)"
+          cmake --install b-sw
           echo "socketw" >> status.txt
 
       # ---------- Dependem do OGRE ----------
@@ -162,7 +167,8 @@ jobs:
           cmake -S mygui -B b-mygui $CMAKE_TC -DOGRE_DIR="$OGRE_CMAKE_DIR" -DMYGUI_RENDERSYSTEM=3 -DMYGUI_STATIC=ON \
             -DMYGUI_BUILD_DEMOS=OFF -DMYGUI_BUILD_TOOLS=OFF -DMYGUI_BUILD_PLUGINS=OFF -DMYGUI_BUILD_DOCS=OFF \
             -DMYGUI_BUILD_TEST_APP=OFF -DMYGUI_DONT_USE_OBSOLETE=ON
-          cmake --build b-mygui -j"$(nproc)" && cmake --install b-mygui
+          cmake --build b-mygui -j"$(nproc)"
+          cmake --install b-mygui
           echo "mygui" >> status.txt
 
       - name: Caelum (master do RigsOfRods, CMake proprio para Android)
@@ -193,7 +199,8 @@ jobs:
           install(FILES ${CMAKE_BINARY_DIR}/gen/CaelumConfig.h DESTINATION include/Caelum)
           CMK
           cmake -S custom-caelum -B b-caelum $CMAKE_TC -DSRC="$PWD/ogre-caelum" -DOGRE_INC="$PREFIX/include/OGRE"
-          cmake --build b-caelum -j"$(nproc)" && cmake --install b-caelum
+          cmake --build b-caelum -j"$(nproc)"
+          cmake --install b-caelum
           echo "caelum" >> status.txt
       - name: PagedGeometry 1.2.0 (CMake proprio para Android)
         continue-on-error: true
@@ -221,7 +228,8 @@ jobs:
           install(FILES ${CMAKE_BINARY_DIR}/gen/PagedGeometryConfig.h DESTINATION include/PagedGeometry)
           CMK
           cmake -S custom-pg -B b-pg $CMAKE_TC -DSRC="$PWD/ogre-pagedgeometry" -DOGRE_INC="$PREFIX/include/OGRE"
-          cmake --build b-pg -j"$(nproc)" && cmake --install b-pg
+          cmake --build b-pg -j"$(nproc)"
+          cmake --install b-pg
           echo "pagedgeometry" >> status.txt
       - name: Resumo das dependencias
         if: always()
@@ -229,7 +237,15 @@ jobs:
           echo "=============== RESUMO ==============="
           fail=0
           for d in ogre fmt rapidjson angelscript openal openssl curl socketw mygui caelum pagedgeometry; do
-            if grep -qx "$d" status.txt; then echo "OK      $d"; else echo "FALHOU  $d"; fail=1; fi
+            case $d in
+              ogre) pat='libOgreMain*.a';; fmt) pat='libfmt*.a';; rapidjson) pat='rapidjson.h';;
+              angelscript) pat='libangelscript*.a';; openal) pat='libopenal*.a';; openssl) pat='libssl.a';;
+              curl) pat='libcurl*.a';; socketw) pat='*ocketw*.a';; mygui) pat='libMyGUIEngine*.a';;
+              caelum) pat='libCaelum*.a';; pagedgeometry) pat='libPagedGeometry*.a';;
+            esac
+            found="$(find sysroot -iname "$pat" 2>/dev/null | head -1)"
+            if grep -qx "$d" status.txt && [ -n "$found" ]; then echo "OK      $d  ($found)"
+            else echo "FALHOU  $d  (arquivo $pat nao encontrado)"; sed -i "/^$d\$/d" status.txt; fail=1; fi
           done
           for d in openssl curl caelum pagedgeometry mygui socketw angelscript openal fmt rapidjson; do
             if ! grep -qx "$d" status.txt && [ -f "logs/$d.log" ]; then
@@ -247,7 +263,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: sysroot
-          key: android-sysroot-v1
+          key: android-sysroot-v2
 
       - name: Empacotar sysroot
         if: always()
