@@ -1,0 +1,192 @@
+# STAGE 1b - Dependencias do Rigs of Rods 2026.01 para Android arm64-v8a (NDK r26d).
+# EXPERIMENTAL / NAO TESTADO. Cada dependencia e um passo separado com continue-on-error:
+# o ultimo passo imprime uma tabela OK/FALHOU para saber exatamente o que quebrou.
+# Versoes seguem o conanfile.py da tag 2026.01. OIS nao entra: nao tem backend Android.
+name: android-deps
+on:
+  workflow_dispatch:
+jobs:
+  deps:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - name: Instalar NDK r26d e definir variaveis
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;26.3.11579264" > /dev/null
+          NDK_DIR="$ANDROID_HOME/ndk/26.3.11579264"
+          PREFIX="$GITHUB_WORKSPACE/sysroot"
+          mkdir -p "$PREFIX"
+          echo "NDK_DIR=$NDK_DIR" >> "$GITHUB_ENV"
+          echo "PREFIX=$PREFIX" >> "$GITHUB_ENV"
+          echo "CMAKE_TC=-DCMAKE_TOOLCHAIN_FILE=$NDK_DIR/build/cmake/android.toolchain.cmake -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-26 -DANDROID_STL=c++_shared -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$PREFIX -DCMAKE_PREFIX_PATH=$PREFIX -DCMAKE_FIND_ROOT_PATH=$PREFIX -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DCMAKE_POLICY_VERSION_MINIMUM=3.5" >> "$GITHUB_ENV"
+          cat "$NDK_DIR/source.properties"
+          touch "$GITHUB_WORKSPACE/status.txt"
+
+      # ---------- OGRE (obrigatorio; com cache porque demora) ----------
+      - name: Restaurar cache do OGRE
+        id: ogre-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: sysroot
+          key: ogre-1.11.6-ndk26d-zzip72-v1
+
+      - name: Build OGRE 1.11.6 (GLES2, estatico)
+        if: steps.ogre-cache.outputs.cache-hit != 'true'
+        run: |
+          set -eo pipefail
+          git clone --depth 1 --branch v1.11.6 https://github.com/OGRECave/ogre.git
+          sed -i 's#archive/develop.zip#archive/refs/tags/v0.13.72.zip#; s#zziplib-develop#zziplib-0.13.72#g; s#-DZZIPCOMPAT=OFF#-DZZIP_COMPAT=OFF -DZZIP_LIBTOOL=OFF -DZZIP_PKGCONFIG=OFF#' ogre/CMake/Dependencies.cmake
+          for pass in 1 2; do
+            cmake -S ogre -B build-ogre -G "Unix Makefiles" $CMAKE_TC \
+              -DOGRE_STATIC=ON -DOGRE_BUILD_DEPENDENCIES=ON \
+              -DOGRE_BUILD_RENDERSYSTEM_GLES2=ON -DOGRE_BUILD_RENDERSYSTEM_GL=OFF -DOGRE_BUILD_RENDERSYSTEM_GL3PLUS=OFF \
+              -DOGRE_BUILD_SAMPLES=OFF -DOGRE_BUILD_TOOLS=OFF -DOGRE_BUILD_TESTS=OFF \
+              -DOGRE_BUILD_COMPONENT_HLMS=OFF -DOGRE_BUILD_COMPONENT_VOLUME=OFF \
+              -DOGRE_BUILD_COMPONENT_PYTHON=OFF -DOGRE_BUILD_COMPONENT_JAVA=OFF -DOGRE_BUILD_COMPONENT_CSHARP=OFF \
+              -DOGRE_BUILD_PLUGIN_BSP=OFF -DOGRE_BUILD_PLUGIN_PCZ=OFF -DOGRE_BUILD_PLUGIN_CG=OFF
+          done
+          grep -q "OGRE_CONFIG_ENABLE_ZIP:BOOL=ON" build-ogre/CMakeCache.txt
+          cmake --build build-ogre -j"$(nproc)"
+          cmake --install build-ogre
+          cp -rn build-ogre/Dependencies/* "$PREFIX"/ || true
+
+      - name: Salvar cache do OGRE
+        if: steps.ogre-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: sysroot
+          key: ogre-1.11.6-ndk26d-zzip72-v1
+
+      - name: Localizar OGREConfig.cmake
+        run: |
+          f="$(find "$PREFIX" -name OGREConfig.cmake | head -1)"
+          echo "OGREConfig: $f"
+          test -n "$f"
+          echo "OGRE_CMAKE_DIR=$(dirname "$f")" >> "$GITHUB_ENV"
+          echo "ogre" >> status.txt
+
+      # ---------- Dependencias simples ----------
+      - name: fmt 10.1.1
+        continue-on-error: true
+        run: |
+          set -eo pipefail
+          git clone --depth 1 --branch 10.1.1 https://github.com/fmtlib/fmt.git
+          cmake -S fmt -B b-fmt $CMAKE_TC -DFMT_TEST=OFF -DFMT_DOC=OFF
+          cmake --build b-fmt -j"$(nproc)" && cmake --install b-fmt
+          echo "fmt" >> status.txt
+
+      - name: RapidJSON (somente cabecalhos)
+        continue-on-error: true
+        run: |
+          set -eo pipefail
+          git clone --depth 1 --branch v1.1.0 https://github.com/Tencent/rapidjson.git
+          cmake -S rapidjson -B b-rj $CMAKE_TC -DRAPIDJSON_BUILD_TESTS=OFF -DRAPIDJSON_BUILD_DOC=OFF -DRAPIDJSON_BUILD_EXAMPLES=OFF
+          cmake --install b-rj
+          echo "rapidjson" >> status.txt
+
+      - name: AngelScript 2.35.1
+        continue-on-error: true
+        run: |
+          set -eo pipefail
+          git clone --depth 1 --branch 2.35.1 https://github.com/AnotherFoxGuy/angelscript.git
+          cmake -S angelscript -B b-as $CMAKE_TC -DBUILD_SHARED_LIBS=OFF
+          cmake --build b-as -j"$(nproc)" && cmake --install b-as
+          echo "angelscript" >> status.txt
+
+      - name: OpenAL Soft 1.22.2 (OpenSL ES)
+        continue-on-error: true
+        run: |
+          set -eo pipefail
+          git clone --depth 1 --branch 1.22.2 https://github.com/kcat/openal-soft.git
+          cmake -S openal-soft -B b-al $CMAKE_TC -DLIBTYPE=STATIC -DALSOFT_UTILS=OFF -DALSOFT_EXAMPLES=OFF -DALSOFT_TESTS=OFF \
+            -DALSOFT_INSTALL_EXAMPLES=OFF -DALSOFT_INSTALL_UTILS=OFF -DALSOFT_BACKEND_OPENSL=ON
+          cmake --build b-al -j"$(nproc)" && cmake --install b-al
+          echo "openal" >> status.txt
+
+      # ---------- Rede ----------
+      - name: OpenSSL 3.1.2
+        continue-on-error: true
+        run: |
+          set -eo pipefail
+          git clone --depth 1 --branch openssl-3.1.2 https://github.com/openssl/openssl.git
+          cd openssl
+          export ANDROID_NDK_ROOT="$NDK_DIR"
+          export PATH="$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
+          ./Configure android-arm64 -D__ANDROID_API__=26 no-shared no-tests no-docs --prefix="$PREFIX" --libdir=lib
+          make -j"$(nproc)"
+          make install_sw
+          echo "openssl" >> "$GITHUB_WORKSPACE/status.txt"
+
+      - name: libcurl 8.2.1
+        continue-on-error: true
+        run: |
+          set -eo pipefail
+          git clone --depth 1 --branch curl-8_2_1 https://github.com/curl/curl.git
+          cmake -S curl -B b-curl $CMAKE_TC -DBUILD_SHARED_LIBS=OFF -DBUILD_CURL_EXE=OFF -DBUILD_TESTING=OFF \
+            -DCMAKE_USE_OPENSSL=ON -DOPENSSL_ROOT_DIR="$PREFIX" -DOPENSSL_USE_STATIC_LIBS=TRUE \
+            -DCURL_DISABLE_LDAP=ON -DUSE_LIBIDN2=OFF -DCURL_USE_LIBPSL=OFF -DCURL_USE_LIBSSH2=OFF
+          cmake --build b-curl -j"$(nproc)" && cmake --install b-curl
+          echo "curl" >> status.txt
+
+      - name: SocketW 3.11.0
+        continue-on-error: true
+        run: |
+          set -eo pipefail
+          git clone --depth 1 --branch 3.11.0 https://github.com/RigsOfRods/socketw.git
+          cmake -S socketw -B b-sw $CMAKE_TC -DOPENSSL_ROOT_DIR="$PREFIX" -DBUILD_SHARED_LIBS=OFF
+          cmake --build b-sw -j"$(nproc)" && cmake --install b-sw
+          echo "socketw" >> status.txt
+
+      # ---------- Dependem do OGRE ----------
+      - name: MyGUI 3.4.0 (render system OGRE, estatico)
+        continue-on-error: true
+        run: |
+          set -eo pipefail
+          git clone --depth 1 --branch MyGUI3.4.0 https://github.com/MyGUI/mygui.git
+          cmake -S mygui -B b-mygui $CMAKE_TC -DOGRE_DIR="$OGRE_CMAKE_DIR" -DMYGUI_RENDERSYSTEM=3 -DMYGUI_STATIC=ON \
+            -DMYGUI_BUILD_DEMOS=OFF -DMYGUI_BUILD_TOOLS=OFF -DMYGUI_BUILD_PLUGINS=OFF -DMYGUI_BUILD_DOCS=OFF \
+            -DMYGUI_BUILD_TEST_APP=OFF -DMYGUI_DONT_USE_OBSOLETE=ON
+          cmake --build b-mygui -j"$(nproc)" && cmake --install b-mygui
+          echo "mygui" >> status.txt
+
+      - name: Caelum (master do RigsOfRods)
+        continue-on-error: true
+        run: |
+          set -eo pipefail
+          git clone --depth 1 https://github.com/RigsOfRods/ogre-caelum.git
+          git -C ogre-caelum rev-parse HEAD | tee caelum-commit.txt
+          cmake -S ogre-caelum -B b-caelum $CMAKE_TC -DOGRE_DIR="$OGRE_CMAKE_DIR" -DCaelum_BUILD_SAMPLES=FALSE -DINSTALL_OGRE_PLUGIN=OFF
+          cmake --build b-caelum -j"$(nproc)" && cmake --install b-caelum
+          echo "caelum" >> status.txt
+
+      - name: PagedGeometry 1.2.0
+        continue-on-error: true
+        run: |
+          set -eo pipefail
+          git clone --depth 1 --branch v1.2.0 https://github.com/RigsOfRods/ogre-pagedgeometry.git
+          cmake -S ogre-pagedgeometry -B b-pg $CMAKE_TC -DOGRE_DIR="$OGRE_CMAKE_DIR" -DPAGEDGEOMETRY_BUILD_SAMPLES=FALSE
+          cmake --build b-pg -j"$(nproc)" && cmake --install b-pg
+          echo "pagedgeometry" >> status.txt
+
+      # ---------- Resultado ----------
+      - name: Resumo das dependencias
+        if: always()
+        run: |
+          echo "=============== RESUMO ==============="
+          fail=0
+          for d in ogre fmt rapidjson angelscript openal openssl curl socketw mygui caelum pagedgeometry; do
+            if grep -qx "$d" status.txt; then echo "OK      $d"; else echo "FALHOU  $d"; fail=1; fi
+          done
+          echo "OIS: nao compilado de proposito (sem backend Android; sera trocado por camada de entrada por toque)"
+          echo "======================================"
+          exit $fail
+
+      - name: Empacotar sysroot
+        if: always()
+        run: tar -czf sysroot-android-arm64.tar.gz sysroot status.txt $(ls caelum-commit.txt 2>/dev/null)
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-sysroot-arm64
+          path: sysroot-android-arm64.tar.gz
+          
