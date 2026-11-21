@@ -223,6 +223,7 @@ jobs:
           add_library(PagedGeometry STATIC ${srcs})
           file(GLOB ogre_sub LIST_DIRECTORIES true ${OGRE_INC}/*)
           target_include_directories(PagedGeometry PRIVATE ${SRC}/include ${CMAKE_BINARY_DIR}/gen ${OGRE_INC} ${ogre_sub})
+          target_compile_options(PagedGeometry PRIVATE "SHELL:-include Ogre.h" -Wno-everything)
           install(TARGETS PagedGeometry ARCHIVE DESTINATION lib)
           install(DIRECTORY ${SRC}/include/ DESTINATION include/PagedGeometry FILES_MATCHING PATTERN "*.h")
           install(FILES ${CMAKE_BINARY_DIR}/gen/PagedGeometryConfig.h DESTINATION include/PagedGeometry)
