@@ -17,7 +17,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libxrandr-dev libxt-dev libxaw7-dev libzzip-dev \
             mesa-common-dev libgl1-mesa-dev libglu1-mesa-dev libfreetype6-dev nvidia-cg-dev \
-            libssl-dev libopenal-dev libois-dev libcurl4-openssl-dev rapidjson-dev gettext libfmt-dev ccache
+            libssl-dev libopenal-dev libois-dev libcurl4-openssl-dev rapidjson-dev gettext ccache
 
       - uses: actions/checkout@v4
         with:
@@ -52,6 +52,12 @@ jobs:
           git clone --depth 1 https://github.com/RigsOfRods/ogre-pagedgeometry.git && (cd ogre-pagedgeometry && cmake -DCMAKE_BUILD_TYPE=Release . && make -j"$(nproc)" && sudo make install)
           git clone https://github.com/RigsOfRods/socketw.git && (cd socketw && cmake -DCMAKE_BUILD_TYPE=Release . && make -j"$(nproc)" && sudo make install)
           git clone --depth 1 --branch 2.35.1 https://github.com/AnotherFoxGuy/angelscript.git && (cd angelscript && cmake -DCMAKE_BUILD_TYPE=Release . && make -j"$(nproc)" && sudo make install)
+          
+      - name: Build fmt 10.1.1
+        run: |
+          git clone --depth 1 --branch 10.1.1 https://github.com/fmtlib/fmt.git && cd fmt
+          cmake -DCMAKE_BUILD_TYPE=Release -DFMT_TEST=OFF -DFMT_DOC=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=ON .
+          make -j"$(nproc)"; sudo make install
 
       - name: Build Rigs of Rods
         working-directory: ror
