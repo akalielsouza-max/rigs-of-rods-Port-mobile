@@ -15,9 +15,9 @@ jobs:
           cat "$ANDROID_HOME/ndk/26.3.11579264/source.properties"
       - name: Clonar OGRE 1.11.6
         run: git clone --depth 1 --branch v1.11.6 https://github.com/OGRECave/ogre.git
-      - name: Fixar zziplib 0.13.72 no OGRE (a versao "develop" atual quebra)
+      - name: Corrigir opcoes da zziplib no OGRE (COMPAT/PKGCONFIG desligados)
         run: |
-          sed -i 's#archive/develop.zip#archive/refs/tags/v0.13.72.zip#; s#zziplib-develop#zziplib-0.13.72#g' ogre/CMake/Dependencies.cmake
+          sed -i 's#archive/develop.zip#archive/refs/tags/v0.13.72.zip#; s#zziplib-develop#zziplib-0.13.72#g; s#-DZZIPCOMPAT=OFF#-DZZIP_COMPAT=OFF -DZZIP_LIBTOOL=OFF -DZZIP_PKGCONFIG=OFF#' ogre/CMake/Dependencies.cmake
           grep -n "zziplib" ogre/CMake/Dependencies.cmake | head
       - name: Configurar (CMake, 2 passadas)
         run: |
