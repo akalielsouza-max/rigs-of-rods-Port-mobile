@@ -1,6 +1,7 @@
 # STAGE 2b - COMPILA DE VERDADE (gera codigo objeto) e TENTA LIGAR o Rigs of Rods 2026.01 para Android arm64.
 # Gera libRoR.so de teste com --no-undefined: a lista de simbolos indefinidos e o mapa do que falta portar
 # (OIS, janela, etc.). NAO e um app funcional. EXPERIMENTAL / NAO TESTADO. Rode depois do android-deps.
+# v2: corrige -fPIC (-Bsymbolic), liga o nucleo da OIS (sem backend) e o cpufeatures do NDK.
 name: android-link
 on:
   workflow_dispatch:
@@ -19,6 +20,7 @@ jobs:
           echo "NDK_DIR=$ANDROID_HOME/ndk/26.3.11579264" >> "$GITHUB_ENV"
           echo "PREFIX=$GITHUB_WORKSPACE/sysroot" >> "$GITHUB_ENV"
           echo "CXX=$ANDROID_HOME/ndk/26.3.11579264/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang++" >> "$GITHUB_ENV"
+          echo "CC=$ANDROID_HOME/ndk/26.3.11579264/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang" >> "$GITHUB_ENV"
 
       - name: Restaurar sysroot (cache do android-deps)
         id: sysroot
@@ -41,11 +43,11 @@ jobs:
           ref: ${{ inputs.ror_ref }}
           path: ror
 
-      - name: Cabecalhos do OIS (so para checar a sintaxe; nao compilamos o OIS)
-        continue-on-error: true
+      - name: Codigo da OIS (cabecalhos + nucleo independente de plataforma)
         run: |
           git clone --depth 1 --branch v1.4 https://github.com/wgois/OIS.git ois
           ls ois/includes | head
+          ls ois/src | head -20
 
       - name: Aplicar patches Android (temporario via sed; versao oficial em patches/)
         run: |
@@ -77,11 +79,26 @@ jobs:
           mkdir -p link-test
           cat > link-test/CMakeLists.txt <<'CMK'
           cmake_minimum_required(VERSION 3.18)
-          project(RoRLinkTest CXX)
+          project(RoRLinkTest C CXX)
           set(CMAKE_CXX_STANDARD 17)
+          set(CMAKE_POSITION_INDEPENDENT_CODE ON)
           include(${INCS_FILE})
           file(GLOB_RECURSE srcs ${SRC}/source/main/*.cpp ${SRC}/external/angelscript_addons/*.cpp)
           list(APPEND srcs ${GEN}/RoRVersion.cpp)
+
+          # --- OIS: so o nucleo independente de plataforma (sem backend). Fecha os simbolos OIS:: ---
+          file(GLOB ois_srcs ${OIS_DIR}/src/*.cpp)
+          add_library(OISCore STATIC ${ois_srcs})
+          target_include_directories(OISCore PUBLIC ${OIS_DIR}/includes)
+          target_compile_definitions(OISCore PUBLIC OIS_STATIC_BUILD)
+          target_compile_options(OISCore PRIVATE -fPIC -Wno-everything)
+
+          # --- cpufeatures do NDK: android_getCpuFamily / android_getCpuFeatures ---
+          set(CPUF $ENV{NDK_DIR}/sources/android/cpufeatures)
+          add_library(cpufeatures STATIC ${CPUF}/cpu-features.c)
+          target_include_directories(cpufeatures PUBLIC ${CPUF})
+          target_compile_options(cpufeatures PRIVATE -fPIC -Wno-everything)
+
           add_library(RoR SHARED ${srcs})
           target_include_directories(RoR PRIVATE ${RoR_INCS})
           foreach(d ${SYS_INCS})
@@ -89,13 +106,14 @@ jobs:
           endforeach()
           target_compile_definitions(RoR PRIVATE USE_OPENAL USE_SOCKETW USE_ANGELSCRIPT AS_USE_NAMESPACE USE_CURL USE_CAELUM USE_PAGED
             _LIBCPP_ENABLE_CXX17_REMOVED_AUTO_PTR _LIBCPP_ENABLE_CXX17_REMOVED_UNARY_BINARY_FUNCTION)
-          target_compile_options(RoR PRIVATE "SHELL:-include ${SRC}/source/main/pch.h" -O0 -g0 -Wno-everything)
+          target_compile_options(RoR PRIVATE "SHELL:-include ${SRC}/source/main/pch.h" -fPIC -O0 -g0 -Wno-everything)
           file(GLOB all_libs ${PREFIX}/lib/*.a)
-          target_link_options(RoR PRIVATE -Wl,--no-undefined -Wl,--error-limit=0)
-          target_link_libraries(RoR PRIVATE -Wl,--start-group ${all_libs} -Wl,--end-group android log EGL GLESv2 OpenSLES z dl)
+          # -Bsymbolic: simbolos definidos dentro da .so deixam de ser "preemptivos" (corrige o erro -fPIC do lld)
+          target_link_options(RoR PRIVATE -Wl,--no-undefined -Wl,--error-limit=0 -Wl,-Bsymbolic)
+          target_link_libraries(RoR PRIVATE OISCore cpufeatures -Wl,--start-group ${all_libs} -Wl,--end-group android log EGL GLESv2 OpenSLES z dl)
           CMK
           cmake -S link-test -B build-link -G "Unix Makefiles" $CMAKE_TC -DCMAKE_BUILD_TYPE=Release \
-            -DSRC="$W/ror" -DGEN="$W/gen" -DPREFIX="$PREFIX" -DINCS_FILE="$W/incs.cmake" 2>&1 | tail -15
+            -DSRC="$W/ror" -DGEN="$W/gen" -DPREFIX="$PREFIX" -DINCS_FILE="$W/incs.cmake" -DOIS_DIR="$W/ois" 2>&1 | tail -15
 
       - name: Compilar e ligar (continua apos erros)
         run: |
