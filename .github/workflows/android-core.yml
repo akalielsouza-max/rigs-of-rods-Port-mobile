@@ -61,7 +61,7 @@ jobs:
             for d in $(find ror/source/main -type d); do echo "-I$d"; done
             [ -d ois/includes ] && echo "-Iois/includes"
             echo "-isystem $PREFIX/include"
-            for d in $(find "$PREFIX/include" -mindepth 1 -maxdepth 2 -type d); do echo "-isystem $d"; done
+            for d in $(find "$PREFIX/include" -mindepth 1 -maxdepth 2 -type d -not -path "*/rapidjson*"); do echo "-isystem $d"; done
           } | tr '\n' ' ' > flags.txt
           wc -w flags.txt
 
