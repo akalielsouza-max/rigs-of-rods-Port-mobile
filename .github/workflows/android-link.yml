@@ -48,6 +48,10 @@ jobs:
           git clone --depth 1 --branch v1.4 https://github.com/wgois/OIS.git ois
           ls ois/includes | head
           ls ois/src | head -20
+          # A OIS trata "qualquer coisa que nao seja Windows/Apple" como Linux e puxa o X11. No Android nao existe X11:
+          # com este patch a OIS fica sem plataforma e createInputSystem apenas lanca excecao em tempo de execucao.
+          sed -i 's|^#else //Probably Linux|#elif defined(__ANDROID__)\n#\tinclude <unistd.h>\n#else //Probably Linux|' ois/includes/OISPrereqs.h
+          grep -n "__ANDROID__" ois/includes/OISPrereqs.h
 
       - name: Aplicar patches Android (temporario via sed; versao oficial em patches/)
         run: |
