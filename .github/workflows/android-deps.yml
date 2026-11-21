@@ -122,7 +122,7 @@ jobs:
           cd openssl
           export ANDROID_NDK_ROOT="$NDK_DIR"
           export PATH="$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
-          ./Configure android-arm64 -D__ANDROID_API__=26 no-shared no-tests no-docs --prefix="$PREFIX" --libdir=lib
+          ./Configure android-arm64 -D__ANDROID_API__=26 no-shared no-tests --prefix="$PREFIX" --libdir=lib
           make -j"$(nproc)"
           make install_sw
           echo "openssl" >> "$GITHUB_WORKSPACE/status.txt"
@@ -165,7 +165,7 @@ jobs:
           cmake --build b-mygui -j"$(nproc)" && cmake --install b-mygui
           echo "mygui" >> status.txt
 
-      - name: Caelum (master do RigsOfRods)
+      - name: Caelum (master do RigsOfRods, CMake proprio para Android)
         continue-on-error: true
         run: |
           mkdir -p "$GITHUB_WORKSPACE/logs"
@@ -173,22 +173,56 @@ jobs:
           set -eo pipefail
           git clone --depth 1 https://github.com/RigsOfRods/ogre-caelum.git
           git -C ogre-caelum rev-parse HEAD | tee caelum-commit.txt
-          cmake -S ogre-caelum -B b-caelum $CMAKE_TC -DOGRE_DIR="$OGRE_CMAKE_DIR" -DCaelum_BUILD_SAMPLES=FALSE -DINSTALL_OGRE_PLUGIN=OFF
+          mkdir -p custom-caelum
+          cat > custom-caelum/CMakeLists.txt <<'CMK'
+          cmake_minimum_required(VERSION 3.10)
+          project(CaelumAndroid CXX)
+          set(CMAKE_CXX_STANDARD 11)
+          set(LIB_MAJOR_VERSION 0)
+          set(LIB_MINOR_VERSION 6)
+          set(LIB_BUILD_VERSION 3)
+          set(CAELUM_SCRIPT_SUPPORT 1)
+          configure_file(${SRC}/main/include/CaelumConfig.h.in ${CMAKE_BINARY_DIR}/gen/CaelumConfig.h)
+          file(GLOB srcs ${SRC}/main/src/*.cpp)
+          add_library(Caelum STATIC ${srcs})
+          target_compile_definitions(Caelum PRIVATE CAELUM_LIB)
+          file(GLOB ogre_sub LIST_DIRECTORIES true ${OGRE_INC}/*)
+          target_include_directories(Caelum PRIVATE ${SRC}/main/include ${CMAKE_BINARY_DIR}/gen ${OGRE_INC} ${ogre_sub})
+          install(TARGETS Caelum ARCHIVE DESTINATION lib)
+          install(DIRECTORY ${SRC}/main/include/ DESTINATION include/Caelum FILES_MATCHING PATTERN "*.h")
+          install(FILES ${CMAKE_BINARY_DIR}/gen/CaelumConfig.h DESTINATION include/Caelum)
+          CMK
+          cmake -S custom-caelum -B b-caelum $CMAKE_TC -DSRC="$PWD/ogre-caelum" -DOGRE_INC="$PREFIX/include/OGRE"
           cmake --build b-caelum -j"$(nproc)" && cmake --install b-caelum
           echo "caelum" >> status.txt
-
-      - name: PagedGeometry 1.2.0
+      - name: PagedGeometry 1.2.0 (CMake proprio para Android)
         continue-on-error: true
         run: |
           mkdir -p "$GITHUB_WORKSPACE/logs"
           exec > >(tee -a "$GITHUB_WORKSPACE/logs/pagedgeometry.log") 2>&1
           set -eo pipefail
           git clone --depth 1 --branch v1.2.0 https://github.com/RigsOfRods/ogre-pagedgeometry.git
-          cmake -S ogre-pagedgeometry -B b-pg $CMAKE_TC -DOGRE_DIR="$OGRE_CMAKE_DIR" -DPAGEDGEOMETRY_BUILD_SAMPLES=FALSE
+          mkdir -p custom-pg
+          cat > custom-pg/CMakeLists.txt <<'CMK'
+          cmake_minimum_required(VERSION 3.10)
+          project(PagedGeometryAndroid CXX)
+          set(CMAKE_CXX_STANDARD 11)
+          set(LIB_MAJOR_VERSION 1)
+          set(LIB_MINOR_VERSION 2)
+          set(LIB_BUILD_VERSION 0)
+          set(LIB_VERSION "1.2.0")
+          configure_file(${SRC}/include/PagedGeometryConfig.h.in ${CMAKE_BINARY_DIR}/gen/PagedGeometryConfig.h)
+          file(GLOB srcs ${SRC}/source/*.cpp)
+          add_library(PagedGeometry STATIC ${srcs})
+          file(GLOB ogre_sub LIST_DIRECTORIES true ${OGRE_INC}/*)
+          target_include_directories(PagedGeometry PRIVATE ${SRC}/include ${CMAKE_BINARY_DIR}/gen ${OGRE_INC} ${ogre_sub})
+          install(TARGETS PagedGeometry ARCHIVE DESTINATION lib)
+          install(DIRECTORY ${SRC}/include/ DESTINATION include/PagedGeometry FILES_MATCHING PATTERN "*.h")
+          install(FILES ${CMAKE_BINARY_DIR}/gen/PagedGeometryConfig.h DESTINATION include/PagedGeometry)
+          CMK
+          cmake -S custom-pg -B b-pg $CMAKE_TC -DSRC="$PWD/ogre-pagedgeometry" -DOGRE_INC="$PREFIX/include/OGRE"
           cmake --build b-pg -j"$(nproc)" && cmake --install b-pg
           echo "pagedgeometry" >> status.txt
-
-      # ---------- Resultado ----------
       - name: Resumo das dependencias
         if: always()
         run: |
