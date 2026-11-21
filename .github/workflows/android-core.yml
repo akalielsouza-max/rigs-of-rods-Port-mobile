@@ -49,13 +49,20 @@ jobs:
           git clone --depth 1 --branch v1.4 https://github.com/wgois/OIS.git ois
           ls ois/includes | head
 
+      - name: Aplicar patches Android (temporario via sed; versao oficial em patches/)
+        run: |
+          # 0001: ErrorUtils.cpp nao conhecia a plataforma Android (macro _L do Language.h)
+          sed -i 's/^#elif OGRE_PLATFORM == OGRE_PLATFORM_LINUX\r\?$/#elif OGRE_PLATFORM == OGRE_PLATFORM_LINUX || OGRE_PLATFORM == OGRE_PLATFORM_ANDROID/' ror/source/main/utils/ErrorUtils.cpp
+          git -C ror diff --stat
+          # Mumble (audio posicional) usa shm_open, que nao existe no Android: fica desligado (-DUSE_MUMBLE removido).
+
       - name: Gerar RoRVersionDef.h e montar flags
         run: |
           mkdir -p gen
           sed -e 's/@VERSION_YEAR@/2026/g' -e 's/@VERSION_MONTH@/01/g' -e 's/@VERSION_SUFFIX@//g' \
             ror/source/version_info/RoRVersionDef.h.in > gen/RoRVersionDef.h
           {
-            echo "-std=c++17 -D_LIBCPP_ENABLE_CXX17_REMOVED_AUTO_PTR -D_LIBCPP_ENABLE_CXX17_REMOVED_UNARY_BINARY_FUNCTION -DUSE_OPENAL -DUSE_SOCKETW -DUSE_ANGELSCRIPT -DAS_USE_NAMESPACE -DUSE_CURL -DUSE_CAELUM -DUSE_PAGED -DUSE_MUMBLE"
+            echo "-std=c++17 -D_LIBCPP_ENABLE_CXX17_REMOVED_AUTO_PTR -D_LIBCPP_ENABLE_CXX17_REMOVED_UNARY_BINARY_FUNCTION -DUSE_OPENAL -DUSE_SOCKETW -DUSE_ANGELSCRIPT -DAS_USE_NAMESPACE -DUSE_CURL -DUSE_CAELUM -DUSE_PAGED"
             echo "-include ror/source/main/pch.h -Wno-everything"
             echo "-Igen -Iror/source/version_info -Iror/external/header_only -Iror/external/angelscript_addons"
             for d in $(find ror/source/main -type d); do echo "-I$d"; done
