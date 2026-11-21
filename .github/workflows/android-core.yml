@@ -59,11 +59,13 @@ jobs:
             echo "-include ror/source/main/pch.h -Wno-everything"
             echo "-Igen -Iror/source/version_info -Iror/external/header_only -Iror/external/angelscript_addons"
             for d in $(find ror/source/main -type d); do echo "-I$d"; done
-            [ -d ois/includes ] && echo "-Iois/includes"
-            echo "-isystem $PREFIX/include"
-            for d in $(find "$PREFIX/include" -mindepth 1 -maxdepth 2 -type d -not -path "*/rapidjson*"); do echo "-isystem $d"; done
+            [ -d ois/includes ] && echo "-idirafter ois/includes"
+            echo "-idirafter $PREFIX/include"
+            for d in $(find "$PREFIX/include" -mindepth 1 -maxdepth 2 -type d -not -path "*/rapidjson*"); do echo "-idirafter $d"; done
           } | tr '\n' ' ' > flags.txt
           wc -w flags.txt
+          echo "=== cabecalhos do sistema duplicados (nao deveriam existir) ===" | tee -a "$GITHUB_STEP_SUMMARY"
+          find sysroot ror ois -name stdint.h -o -name inttypes.h -o -name stddef.h -o -name stdlib.h -o -name string.h 2>/dev/null | head -20 | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Diagnostico do pch.h (cabecalho comum a todos os arquivos)
         run: |
