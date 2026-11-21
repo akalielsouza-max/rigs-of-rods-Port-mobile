@@ -65,6 +65,12 @@ jobs:
           } | tr '\n' ' ' > flags.txt
           wc -w flags.txt
 
+      - name: Diagnostico do pch.h (cabecalho comum a todos os arquivos)
+        run: |
+          eval "$CXX $(cat flags.txt) -fsyntax-only -ferror-limit=0 -x c++ ror/source/main/pch.h" > pch-diag.txt 2>&1 || true
+          echo "=== PRIMEIROS ERROS DO pch.h ===" | tee -a "$GITHUB_STEP_SUMMARY"
+          grep -a -E "error" pch-diag.txt | head -30 | cut -c1-260 | tee -a "$GITHUB_STEP_SUMMARY"
+
       - name: Varredura e relatorio (clang -fsyntax-only)
         run: |
           cat > sweep.py <<'PY'
@@ -80,7 +86,7 @@ jobs:
           srcs = sorted(glob.glob(root + "/**/*.cpp", recursive=True))
 
           def run(f):
-              p = subprocess.run([cxx] + flags + ["-fsyntax-only", "-ferror-limit=5", f],
+              p = subprocess.run([cxx] + flags + ["-fsyntax-only", "-ferror-limit=20", f],
                                  capture_output=True, text=True)
               return f, p.returncode, p.stderr
 
@@ -94,11 +100,17 @@ jobs:
               return rel.split(os.sep)[0] if os.sep in rel else "(raiz)"
 
           mods = collections.OrderedDict()
-          msgs = collections.Counter(); headers = collections.Counter()
+          msgs = collections.Counter(); headers = collections.Counter(); first = collections.Counter(); names = collections.Counter()
           for f, rc, err in res:
               m = module(f); d = mods.setdefault(m, [0, 0]); d[0 if rc == 0 else 1] += 1
               open(os.path.join(outdir, os.path.relpath(f, root).replace(os.sep, "__") + ".log"), "w").write(err)
+              fe = re.search(r"^(\S+?):(\d+):\d+: (?:fatal )?error: (.*)$", err, re.M)
+              if fe:
+                  loc = re.sub(r"^.*?/(include|source|ror)/", r"\1/", fe.group(1)) + ":" + fe.group(2)
+                  first[loc + " :: " + fe.group(3)[:110]] += 1
               for line in err.splitlines():
+                  u = re.search(r"unknown type name '([^']+)'", line)
+                  if u: names[u.group(1)] += 1
                   h = re.search(r"fatal error: '([^']+)' file not found", line)
                   if h: headers[h.group(1)] += 1
                   e = re.search(r"error: (.*)", line)
@@ -113,18 +125,25 @@ jobs:
               lines.append(f"| {m} | {a} | {b} |")
           lines += ["", "## Cabecalhos nao encontrados (top 20)"]
           lines += [f"- {c}x `{h}`" for h, c in headers.most_common(20)] or ["- nenhum"]
+          lines += ["", "## ONDE ocorre o PRIMEIRO erro de cada arquivo (top 15) <- o mais importante"]
+          lines += [f"- {c}x {m}" for m, c in first.most_common(15)] or ["- nenhum"]
+          lines += ["", "## Tipos desconhecidos mais comuns (top 25)"]
+          lines += [f"- {c}x {n}" for n, c in names.most_common(25)] or ["- nenhum"]
           lines += ["", "## Mensagens de erro mais comuns (top 20)"]
           lines += [f"- {c}x {m}" for m, c in msgs.most_common(20)] or ["- nenhuma"]
-          lines += ["", "## Arquivos que falham (primeiros 60)"]
-          lines += [f"- {os.path.relpath(f, root)}" for f, rc, _ in res if rc != 0][:60]
+          lines += ["", "## Arquivos que falham (primeiros 20)"]
+          lines += [f"- {os.path.relpath(f, root)}" for f, rc, _ in res if rc != 0][:20]
           open(os.path.join(outdir, "REPORT.md"), "w").write("\n".join(lines) + "\n")
           print("\n".join(lines))
           PY
           python3 sweep.py ror/source/main | tee report.txt
-          cp results/REPORT.md "$GITHUB_STEP_SUMMARY"
+          cat results/REPORT.md >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: sweep-results
-          path: results
+          path: |
+            results
+            pch-diag.txt
+            
