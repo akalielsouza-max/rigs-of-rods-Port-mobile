@@ -1,0 +1,51 @@
+# STAGE 1a - Teste de viabilidade: OGRE 1.11.6 + render system GLES2 para arm64-v8a com o NDK do runner.
+# EXPERIMENTAL / NAO TESTADO. Se falhar, o log vai como artefato: me envie para diagnosticar.
+name: android-ogre-gles2
+on:
+  workflow_dispatch:
+jobs:
+  ogre-android:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Mostrar NDK do runner
+        run: |
+          echo "NDK=$ANDROID_NDK_LATEST_HOME"; ls "$ANDROID_NDK_LATEST_HOME" | head
+          cat "$ANDROID_NDK_LATEST_HOME/source.properties"
+      - name: Clonar OGRE 1.11.6
+        run: git clone --depth 1 --branch v1.11.6 https://github.com/OGRECave/ogre.git
+      - name: Configurar (CMake)
+        run: |
+          set -o pipefail
+          cmake -S ogre -B build-ogre -G "Unix Makefiles" \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_LATEST_HOME/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-26 -DANDROID_STL=c++_shared \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$PWD/install-ogre" \
+            -DOGRE_STATIC=ON -DOGRE_BUILD_DEPENDENCIES=ON \
+            -DOGRE_BUILD_RENDERSYSTEM_GLES2=ON -DOGRE_BUILD_RENDERSYSTEM_GL=OFF -DOGRE_BUILD_RENDERSYSTEM_GL3PLUS=OFF \
+            -DOGRE_BUILD_SAMPLES=OFF -DOGRE_BUILD_TOOLS=OFF -DOGRE_BUILD_TESTS=OFF \
+            -DOGRE_BUILD_COMPONENT_HLMS=OFF -DOGRE_BUILD_COMPONENT_VOLUME=OFF \
+            -DOGRE_BUILD_COMPONENT_PYTHON=OFF -DOGRE_BUILD_COMPONENT_JAVA=OFF -DOGRE_BUILD_COMPONENT_CSHARP=OFF \
+            -DOGRE_BUILD_PLUGIN_BSP=OFF -DOGRE_BUILD_PLUGIN_PCZ=OFF -DOGRE_BUILD_PLUGIN_CG=OFF \
+            2>&1 | tee configure.log
+      - name: Compilar e instalar
+        run: |
+          set -o pipefail
+          cmake --build build-ogre -j"$(nproc)" 2>&1 | tee build.log
+          cmake --install build-ogre
+      - name: Listar bibliotecas geradas
+        if: success()
+        run: find install-ogre -name '*.a' -o -name '*.so' | sort
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-ogre-logs
+          path: |
+            configure.log
+            build.log
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: ogre-android-arm64
+          path: install-ogre
+          
