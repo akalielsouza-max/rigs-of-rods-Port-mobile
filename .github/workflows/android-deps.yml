@@ -69,6 +69,8 @@ jobs:
       - name: fmt 10.1.1
         continue-on-error: true
         run: |
+          mkdir -p "$GITHUB_WORKSPACE/logs"
+          exec > >(tee -a "$GITHUB_WORKSPACE/logs/fmt.log") 2>&1
           set -eo pipefail
           git clone --depth 1 --branch 10.1.1 https://github.com/fmtlib/fmt.git
           cmake -S fmt -B b-fmt $CMAKE_TC -DFMT_TEST=OFF -DFMT_DOC=OFF
@@ -78,6 +80,8 @@ jobs:
       - name: RapidJSON (somente cabecalhos)
         continue-on-error: true
         run: |
+          mkdir -p "$GITHUB_WORKSPACE/logs"
+          exec > >(tee -a "$GITHUB_WORKSPACE/logs/rapidjson.log") 2>&1
           set -eo pipefail
           git clone --depth 1 --branch v1.1.0 https://github.com/Tencent/rapidjson.git
           cmake -S rapidjson -B b-rj $CMAKE_TC -DRAPIDJSON_BUILD_TESTS=OFF -DRAPIDJSON_BUILD_DOC=OFF -DRAPIDJSON_BUILD_EXAMPLES=OFF
@@ -87,6 +91,8 @@ jobs:
       - name: AngelScript 2.35.1
         continue-on-error: true
         run: |
+          mkdir -p "$GITHUB_WORKSPACE/logs"
+          exec > >(tee -a "$GITHUB_WORKSPACE/logs/angelscript.log") 2>&1
           set -eo pipefail
           git clone --depth 1 --branch 2.35.1 https://github.com/AnotherFoxGuy/angelscript.git
           cmake -S angelscript -B b-as $CMAKE_TC -DBUILD_SHARED_LIBS=OFF
@@ -96,6 +102,8 @@ jobs:
       - name: OpenAL Soft 1.22.2 (OpenSL ES)
         continue-on-error: true
         run: |
+          mkdir -p "$GITHUB_WORKSPACE/logs"
+          exec > >(tee -a "$GITHUB_WORKSPACE/logs/openal.log") 2>&1
           set -eo pipefail
           git clone --depth 1 --branch 1.22.2 https://github.com/kcat/openal-soft.git
           cmake -S openal-soft -B b-al $CMAKE_TC -DLIBTYPE=STATIC -DALSOFT_UTILS=OFF -DALSOFT_EXAMPLES=OFF -DALSOFT_TESTS=OFF \
@@ -107,6 +115,8 @@ jobs:
       - name: OpenSSL 3.1.2
         continue-on-error: true
         run: |
+          mkdir -p "$GITHUB_WORKSPACE/logs"
+          exec > >(tee -a "$GITHUB_WORKSPACE/logs/openssl.log") 2>&1
           set -eo pipefail
           git clone --depth 1 --branch openssl-3.1.2 https://github.com/openssl/openssl.git
           cd openssl
@@ -120,6 +130,8 @@ jobs:
       - name: libcurl 8.2.1
         continue-on-error: true
         run: |
+          mkdir -p "$GITHUB_WORKSPACE/logs"
+          exec > >(tee -a "$GITHUB_WORKSPACE/logs/curl.log") 2>&1
           set -eo pipefail
           git clone --depth 1 --branch curl-8_2_1 https://github.com/curl/curl.git
           cmake -S curl -B b-curl $CMAKE_TC -DBUILD_SHARED_LIBS=OFF -DBUILD_CURL_EXE=OFF -DBUILD_TESTING=OFF \
@@ -131,6 +143,8 @@ jobs:
       - name: SocketW 3.11.0
         continue-on-error: true
         run: |
+          mkdir -p "$GITHUB_WORKSPACE/logs"
+          exec > >(tee -a "$GITHUB_WORKSPACE/logs/socketw.log") 2>&1
           set -eo pipefail
           git clone --depth 1 --branch 3.11.0 https://github.com/RigsOfRods/socketw.git
           cmake -S socketw -B b-sw $CMAKE_TC -DOPENSSL_ROOT_DIR="$PREFIX" -DBUILD_SHARED_LIBS=OFF
@@ -141,6 +155,8 @@ jobs:
       - name: MyGUI 3.4.0 (render system OGRE, estatico)
         continue-on-error: true
         run: |
+          mkdir -p "$GITHUB_WORKSPACE/logs"
+          exec > >(tee -a "$GITHUB_WORKSPACE/logs/mygui.log") 2>&1
           set -eo pipefail
           git clone --depth 1 --branch MyGUI3.4.0 https://github.com/MyGUI/mygui.git
           cmake -S mygui -B b-mygui $CMAKE_TC -DOGRE_DIR="$OGRE_CMAKE_DIR" -DMYGUI_RENDERSYSTEM=3 -DMYGUI_STATIC=ON \
@@ -152,6 +168,8 @@ jobs:
       - name: Caelum (master do RigsOfRods)
         continue-on-error: true
         run: |
+          mkdir -p "$GITHUB_WORKSPACE/logs"
+          exec > >(tee -a "$GITHUB_WORKSPACE/logs/caelum.log") 2>&1
           set -eo pipefail
           git clone --depth 1 https://github.com/RigsOfRods/ogre-caelum.git
           git -C ogre-caelum rev-parse HEAD | tee caelum-commit.txt
@@ -162,6 +180,8 @@ jobs:
       - name: PagedGeometry 1.2.0
         continue-on-error: true
         run: |
+          mkdir -p "$GITHUB_WORKSPACE/logs"
+          exec > >(tee -a "$GITHUB_WORKSPACE/logs/pagedgeometry.log") 2>&1
           set -eo pipefail
           git clone --depth 1 --branch v1.2.0 https://github.com/RigsOfRods/ogre-pagedgeometry.git
           cmake -S ogre-pagedgeometry -B b-pg $CMAKE_TC -DOGRE_DIR="$OGRE_CMAKE_DIR" -DPAGEDGEOMETRY_BUILD_SAMPLES=FALSE
@@ -177,13 +197,20 @@ jobs:
           for d in ogre fmt rapidjson angelscript openal openssl curl socketw mygui caelum pagedgeometry; do
             if grep -qx "$d" status.txt; then echo "OK      $d"; else echo "FALHOU  $d"; fail=1; fi
           done
+          for d in openssl curl caelum pagedgeometry mygui socketw angelscript openal fmt rapidjson; do
+            if ! grep -qx "$d" status.txt && [ -f "logs/$d.log" ]; then
+              echo; echo "######## ERROS DE $d ########"
+              grep -a -n -E "error|Error|ERROR|not found|No such|fatal|CMake Error" "logs/$d.log" | head -25 | cut -c1-300
+              echo "--- ultimas linhas ---"; tail -8 "logs/$d.log" | cut -c1-300
+            fi
+          done
           echo "OIS: nao compilado de proposito (sem backend Android; sera trocado por camada de entrada por toque)"
           echo "======================================"
           exit $fail
 
       - name: Empacotar sysroot
         if: always()
-        run: tar -czf sysroot-android-arm64.tar.gz sysroot status.txt $(ls caelum-commit.txt 2>/dev/null)
+        run: tar -czf sysroot-android-arm64.tar.gz sysroot status.txt logs $(ls caelum-commit.txt 2>/dev/null)
       - uses: actions/upload-artifact@v4
         if: always()
         with:
