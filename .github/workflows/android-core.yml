@@ -1,7 +1,7 @@
 # STAGE 2a - Varredura de compatibilidade do codigo do Rigs of Rods 2026.01 para Android arm64.
 # NAO gera APK nem executavel. Roda clang -fsyntax-only em cada .cpp de source/main usando o sysroot
 # do workflow android-deps e mostra quais modulos compilam e quais erros aparecem.
-# EXPERIMENTAL / NAO TESTADO. Execute ANTES o android-deps (ele salva o cache android-sysroot-v1).
+# EXPERIMENTAL / NAO TESTADO. Execute ANTES o android-deps (ele salva o cache android-sysroot-v2).
 # Resultado vermelho nao acontece: o relatorio e a informacao. Leia o passo "Relatorio".
 name: android-core
 on:
@@ -27,12 +27,12 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: sysroot
-          key: android-sysroot-v1
+          key: android-sysroot-v2
 
       - name: Verificar sysroot
         run: |
           if [ "${{ steps.sysroot.outputs.cache-hit }}" != "true" ]; then
-            echo "ERRO: cache android-sysroot-v1 nao encontrado. Rode o workflow android-deps ate o fim (todas as dependencias OK) e tente de novo."
+            echo "ERRO: cache android-sysroot-v2 nao encontrado. Rode o workflow android-deps ate o fim (todas as dependencias OK) e tente de novo."
             exit 1
           fi
           ls sysroot/include | head -30
