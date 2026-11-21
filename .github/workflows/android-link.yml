@@ -1,0 +1,127 @@
+# STAGE 2b - COMPILA DE VERDADE (gera codigo objeto) e TENTA LIGAR o Rigs of Rods 2026.01 para Android arm64.
+# Gera libRoR.so de teste com --no-undefined: a lista de simbolos indefinidos e o mapa do que falta portar
+# (OIS, janela, etc.). NAO e um app funcional. EXPERIMENTAL / NAO TESTADO. Rode depois do android-deps.
+name: android-link
+on:
+  workflow_dispatch:
+    inputs:
+      ror_ref:
+        description: "Tag/commit do Rigs of Rods"
+        default: "2026.01"
+jobs:
+  link:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - name: Instalar NDK r26d
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;26.3.11579264" > /dev/null
+          echo "NDK_DIR=$ANDROID_HOME/ndk/26.3.11579264" >> "$GITHUB_ENV"
+          echo "PREFIX=$GITHUB_WORKSPACE/sysroot" >> "$GITHUB_ENV"
+          echo "CXX=$ANDROID_HOME/ndk/26.3.11579264/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang++" >> "$GITHUB_ENV"
+
+      - name: Restaurar sysroot (cache do android-deps)
+        id: sysroot
+        uses: actions/cache/restore@v4
+        with:
+          path: sysroot
+          key: android-sysroot-v2
+
+      - name: Verificar sysroot
+        run: |
+          if [ "${{ steps.sysroot.outputs.cache-hit }}" != "true" ]; then
+            echo "ERRO: cache android-sysroot-v2 nao encontrado. Rode o workflow android-deps ate o fim (todas as dependencias OK) e tente de novo."
+            exit 1
+          fi
+          ls sysroot/include | head -30
+
+      - uses: actions/checkout@v4
+        with:
+          repository: RigsOfRods/rigs-of-rods
+          ref: ${{ inputs.ror_ref }}
+          path: ror
+
+      - name: Cabecalhos do OIS (so para checar a sintaxe; nao compilamos o OIS)
+        continue-on-error: true
+        run: |
+          git clone --depth 1 --branch v1.4 https://github.com/wgois/OIS.git ois
+          ls ois/includes | head
+
+      - name: Aplicar patches Android (temporario via sed; versao oficial em patches/)
+        run: |
+          # 0001: ErrorUtils.cpp nao conhecia a plataforma Android (macro _L do Language.h)
+          sed -i 's/^#elif OGRE_PLATFORM == OGRE_PLATFORM_LINUX\r\?$/#elif OGRE_PLATFORM == OGRE_PLATFORM_LINUX || OGRE_PLATFORM == OGRE_PLATFORM_ANDROID/' ror/source/main/utils/ErrorUtils.cpp
+          git -C ror diff --stat
+          # Mumble (audio posicional) usa shm_open, que nao existe no Android: fica desligado (-DUSE_MUMBLE removido).
+
+      - name: Gerar arquivos de versao
+        run: |
+          mkdir -p gen
+          sed -e 's/@VERSION_YEAR@/2026/g' -e 's/@VERSION_MONTH@/01/g' -e 's/@VERSION_SUFFIX@//g' \
+            ror/source/version_info/RoRVersionDef.h.in > gen/RoRVersionDef.h
+          sed -e 's/@VERSION_YEAR@/2026/g' -e 's/@VERSION_MONTH@/01/g' -e 's/@VERSION_SUFFIX@//g' \
+            -e 's/@BUILD_DATE@/ci/g' -e 's/@BUILD_TIME@/ci/g' \
+            ror/source/version_info/RoRVersion.cpp.in > gen/RoRVersion.cpp
+
+      - name: Montar CMake de teste
+        run: |
+          W="$GITHUB_WORKSPACE"
+          { echo "set(RoR_INCS $W/gen $W/ror/source/version_info $W/ror/external/header_only $W/ror/external/angelscript_addons"
+            for d in $(find ror/source/main -type d); do echo "  $W/$d"; done
+            echo ")"
+            echo "set(SYS_INCS $PREFIX/include"
+            for d in $(find "$PREFIX/include" -mindepth 1 -maxdepth 2 -type d -not -path "*/rapidjson*"); do echo "  $d"; done
+            [ -d ois/includes ] && echo "  $W/ois/includes"
+            echo ")"
+          } > incs.cmake
+          mkdir -p link-test
+          cat > link-test/CMakeLists.txt <<'CMK'
+          cmake_minimum_required(VERSION 3.18)
+          project(RoRLinkTest CXX)
+          set(CMAKE_CXX_STANDARD 17)
+          include(${INCS_FILE})
+          file(GLOB_RECURSE srcs ${SRC}/source/main/*.cpp ${SRC}/external/angelscript_addons/*.cpp)
+          list(APPEND srcs ${GEN}/RoRVersion.cpp)
+          add_library(RoR SHARED ${srcs})
+          target_include_directories(RoR PRIVATE ${RoR_INCS})
+          target_include_directories(RoR AFTER PRIVATE ${SYS_INCS})
+          target_compile_definitions(RoR PRIVATE USE_OPENAL USE_SOCKETW USE_ANGELSCRIPT AS_USE_NAMESPACE USE_CURL USE_CAELUM USE_PAGED
+            _LIBCPP_ENABLE_CXX17_REMOVED_AUTO_PTR _LIBCPP_ENABLE_CXX17_REMOVED_UNARY_BINARY_FUNCTION)
+          target_compile_options(RoR PRIVATE "SHELL:-include ${SRC}/source/main/pch.h" -O0 -g0 -Wno-everything)
+          file(GLOB all_libs ${PREFIX}/lib/*.a)
+          target_link_options(RoR PRIVATE -Wl,--no-undefined -Wl,--error-limit=0)
+          target_link_libraries(RoR PRIVATE -Wl,--start-group ${all_libs} -Wl,--end-group android log EGL GLESv2 OpenSLES z dl)
+          CMK
+          cmake -S link-test -B build-link -G "Unix Makefiles" $CMAKE_TC -DCMAKE_BUILD_TYPE=Release \
+            -DSRC="$W/ror" -DGEN="$W/gen" -DPREFIX="$PREFIX" -DINCS_FILE="$W/incs.cmake" 2>&1 | tail -15
+
+      - name: Compilar e ligar (continua apos erros)
+        run: |
+          cmake --build build-link -j"$(nproc)" -- -k > build-link.log 2>&1 || true
+          tail -3 build-link.log
+          ls -la build-link/*.so 2>/dev/null || echo "libRoR.so NAO foi gerada (esperado no primeiro teste)"
+
+      - name: Relatorio
+        run: |
+          {
+          echo "# Relatorio de compilacao+ligacao (arm64)"
+          echo; echo "Objetos compilados: $(find build-link -name '*.o' | wc -l) de $(find ror/source/main ror/external/angelscript_addons -name '*.cpp' | wc -l)"
+          echo; echo "## Arquivos .cpp com erro de COMPILACAO"
+          grep -a -E "^[^ ]+\.cpp:[0-9]+:[0-9]+: (fatal )?error" build-link.log | sed 's#^.*/ror/##' | cut -d: -f1 | sort | uniq -c | sort -rn | head -20
+          echo; echo "## Primeiros erros de compilacao"
+          grep -a -E "error:" build-link.log | grep -v "undefined symbol" | sed 's#^.*/ror/##' | head -15 | cut -c1-250
+          echo; echo "## LIGACAO: simbolos indefinidos: $(grep -a -c 'undefined symbol' build-link.log)"
+          echo "### Por prefixo (top 25)"
+          grep -a "undefined symbol" build-link.log | sed 's/.*undefined symbol: //' | sed -E 's/^(OIS::|Ogre::|MyGUI::|RoR::|AngelScript::|[A-Za-z_]+).*/\1/' | sort | uniq -c | sort -rn | head -25
+          echo "### Primeiros 40 simbolos"
+          grep -a "undefined symbol" build-link.log | sed 's/.*undefined symbol: //' | sort -u | head -40 | cut -c1-200
+          } | tee report-link.md >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: link-results
+          path: |
+            report-link.md
+            build-link.log
+            
