@@ -56,7 +56,10 @@ static _Unwind_Reason_Code unwindCb(struct _Unwind_Context* c, void* arg) {
     if (b->n < 40) b->pcs[b->n++] = (void*)_Unwind_GetIP(c);
     return _URC_NO_REASON;
 }
+static volatile int g_inCrash = 0;
 static void crashHandler(int sig, siginfo_t* si, void*) {
+    if (g_inCrash) _exit(139);
+    g_inCrash = 1;
     int fd = open(g_logPath, O_WRONLY | O_APPEND | O_CREAT, 0644);
     if (fd >= 0) {
         char buf[600];
@@ -68,9 +71,9 @@ static void crashHandler(int sig, siginfo_t* si, void*) {
             Dl_info d;
             if (dladdr(b.pcs[i], &d)) {
                 const char* lib = d.dli_fname ? strrchr(d.dli_fname, '/') : nullptr;
-                n = snprintf(buf, sizeof buf, "  #%d %s+0x%lx (%s)\n", i, d.dli_sname ? d.dli_sname : "?",
-                             d.dli_saddr ? (unsigned long)((uintptr_t)b.pcs[i] - (uintptr_t)d.dli_saddr) : 0UL,
-                             lib ? lib + 1 : "?");
+                n = snprintf(buf, sizeof buf, "  #%d %s (%s) rel=0x%lx\n", i, d.dli_sname ? d.dli_sname : "?",
+                             lib ? lib + 1 : "?",
+                             (unsigned long)((uintptr_t)b.pcs[i] - (uintptr_t)d.dli_fbase));
             } else {
                 n = snprintf(buf, sizeof buf, "  #%d %p\n", i, b.pcs[i]);
             }
@@ -78,6 +81,7 @@ static void crashHandler(int sig, siginfo_t* si, void*) {
         }
         close(fd);
     }
+    _exit(139);
 }
 static void installCrashHandlers() {
     struct sigaction sa;
@@ -145,9 +149,11 @@ static void renderMain(ANativeWindow* win) {
 
         addLog("Passo 5 ok. Passo 6: criando cena...");
         Ogre::SceneManager* sm = root->createSceneManager();
+        addLog("Passo 6a ok (SceneManager)");
         Ogre::Camera* cam = sm->createCamera("cam");
+        addLog("Passo 6b ok (Camera)");
         Ogre::Viewport* vp = w->addViewport(cam);
-        addLog("Cena criada. Renderizando...");
+        addLog("Passo 6c ok (Viewport). Renderizando...");
 
         auto t0 = std::chrono::steady_clock::now();
         auto tl = t0;
@@ -155,8 +161,10 @@ static void renderMain(ANativeWindow* win) {
         while (!g_stop) {
             float t = std::chrono::duration<float>(std::chrono::steady_clock::now() - t0).count();
             vp->setBackgroundColour(Ogre::ColourValue(0.25f + 0.2f * std::sin(t), 0.55f, 0.9f - 0.2f * std::sin(t)));
+            if (frames == 0) addLog("Quadro 1: chamando renderOneFrame...");
             if (!root->renderOneFrame()) break;
             frames++;
+            if (frames == 1) addLog("Quadro 1 ok");
             if (frames == 30) addLog("FRAMES_OK: o OGRE desenhou 30 quadros");
             auto now = std::chrono::steady_clock::now();
             if (std::chrono::duration<float>(now - tl).count() >= 2.0f) {
