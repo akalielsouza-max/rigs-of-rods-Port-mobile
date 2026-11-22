@@ -14,7 +14,7 @@ jobs:
 
       - name: Conferir arquivos do app (detecta arquivo cortado ao colar)
         run: |
-          for f in ogre-app/ror_render.cpp ogre-app/MainActivity.java; do
+          for f in ogre-app/ror_render.cpp ogre-app/MainActivity.java ogre-app/ContentInstaller.java; do
             if [ ! -f "$f" ]; then echo "ERRO: falta o arquivo $f no repositorio"; exit 1; fi
             if ! tail -n 3 "$f" | grep -q FIM_DO_ARQUIVO; then echo "ERRO: $f esta incompleto (cortado ao colar). Cole de novo."; exit 1; fi
             wc -c "$f"
@@ -152,12 +152,15 @@ jobs:
                   applicationId 'org.rigsofrods.mobile'
                   minSdk 26
                   targetSdk 34
-                  versionCode 3
-                  versionName '0.3-ogre'
+                  versionCode 4
+                  versionName '0.4-conteudo'
                   ndk { abiFilters 'arm64-v8a' }
               }
               packaging {
                   jniLibs { useLegacyPackaging = true }
+              }
+              androidResources {
+                  noCompress 'zip'
               }
           }
           EOF
@@ -183,6 +186,59 @@ jobs:
           EOF
 
           cp "$GITHUB_WORKSPACE/ogre-app/MainActivity.java" app/src/main/java/org/rigsofrods/mobile/MainActivity.java
+          cp "$GITHUB_WORKSPACE/ogre-app/ContentInstaller.java" app/src/main/java/org/rigsofrods/mobile/ContentInstaller.java
+
+      - name: Preparar conteudo do RoR (recursos + 1 mapa + 1 carro)
+        id: s_content
+        run: |
+          A="$GITHUB_WORKSPACE/apk-project/app/src/main/assets/ror"
+          mkdir -p "$A/resources" "$A/content"
+          git clone -q --depth 1 --branch 2026.01 https://github.com/RigsOfRods/rigs-of-rods.git ror-src
+          # igual ao CMake do RoR: cada pasta de resources/ vira um .zip (sem sons e wallpapers, que sao grandes e nao servem agora)
+          for d in ror-src/resources/*/; do
+            n=$(basename "$d")
+            case "$n" in sounds|wallpapers) continue;; esac
+            (cd "$d" && zip -qr -9 "$A/resources/$n.zip" .)
+          done
+
+          cat > fetch_pack.py <<'PY'
+          import io, sys, urllib.request, zipfile
+          class Http(io.RawIOBase):
+              def __init__(self, url):
+                  self.url = url
+                  self.pos = 0
+                  self.size = int(urllib.request.urlopen(urllib.request.Request(url, method="HEAD")).headers["Content-Length"])
+              def seekable(self): return True
+              def readable(self): return True
+              def tell(self): return self.pos
+              def seek(self, o, w=0):
+                  self.pos = o if w == 0 else (self.pos + o if w == 1 else self.size + o)
+                  return self.pos
+              def read(self, n=-1):
+                  if n < 0: n = self.size - self.pos
+                  if n == 0 or self.pos >= self.size: return b""
+                  end = min(self.pos + n, self.size) - 1
+                  req = urllib.request.Request(self.url, headers={"Range": "bytes=%d-%d" % (self.pos, end)})
+                  d = urllib.request.urlopen(req).read()
+                  self.pos += len(d)
+                  return d
+              def readinto(self, b):
+                  d = self.read(len(b)); b[:len(d)] = d; return len(d)
+          pack, member, outdir = sys.argv[1], sys.argv[2], sys.argv[3]
+          url = "https://github.com/CuriousMike56/ContentPacks/releases/download/2022.12/ContentPack_%s.zip" % pack
+          final = urllib.request.urlopen(urllib.request.Request(url, method="HEAD")).geturl()
+          z = zipfile.ZipFile(Http(final))
+          data = z.read(member)
+          open(outdir + "/" + member, "wb").write(data)
+          print("OK", pack, member, len(data), "bytes")
+          PY
+          python3 fetch_pack.py Terrains airport.zip "$A/content"
+          python3 fetch_pack.py LightVehicles Box69Camaro.zip "$A/content"
+          {
+          echo "## Conteudo embutido no app"
+          du -sh "$A"
+          ls -la "$A/resources" "$A/content"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Compilar APK (debug)
         id: s_build
