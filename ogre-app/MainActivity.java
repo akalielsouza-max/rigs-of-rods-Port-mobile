@@ -8,8 +8,10 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.view.MotionEvent;
 import android.view.Surface;
 import android.view.SurfaceHolder;
+import android.view.ScaleGestureDetector;
 import android.view.SurfaceView;
 import android.view.View;
 import android.view.ViewGroup;
@@ -27,6 +29,8 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
     private static native String nativeStart(Surface s, String logPath);
     private static native void nativeStop();
     private static native String nativeGetLog();
+    private static native void nativeTouch(float dx, float dy);
+    private static native void nativeZoom(float factor);
 
     private TextView out;
     private TextView ogreOut;
@@ -35,6 +39,10 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
     private boolean ogreRunning = false;
     private boolean renderLibLoaded = false;
     private boolean okMarked = false;
+    private float lastX;
+    private float lastY;
+    private boolean dragging = false;
+    private ScaleGestureDetector scaleDet;
     private final Handler handler = new Handler(Looper.getMainLooper());
 
     private final Runnable poll = new Runnable() {
@@ -81,6 +89,46 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
 
         SurfaceView sv = new SurfaceView(this);
         sv.getHolder().addCallback(this);
+        scaleDet = new ScaleGestureDetector(this, new ScaleGestureDetector.SimpleOnScaleGestureListener() {
+            @Override
+            public boolean onScale(ScaleGestureDetector d) {
+                if (ogreRunning) {
+                    try {
+                        nativeZoom(d.getScaleFactor());
+                    } catch (Throwable ignored) {
+                    }
+                }
+                return true;
+            }
+        });
+        sv.setOnTouchListener(new View.OnTouchListener() {
+            @Override
+            public boolean onTouch(View v, MotionEvent e) {
+                scaleDet.onTouchEvent(e);
+                if (scaleDet.isInProgress()) {
+                    dragging = false;
+                    return true;
+                }
+                int a = e.getActionMasked();
+                if (a == MotionEvent.ACTION_DOWN) {
+                    lastX = e.getX();
+                    lastY = e.getY();
+                    dragging = true;
+                } else if (a == MotionEvent.ACTION_MOVE) {
+                    if (dragging && ogreRunning) {
+                        try {
+                            nativeTouch(e.getX() - lastX, e.getY() - lastY);
+                        } catch (Throwable ignored) {
+                        }
+                        lastX = e.getX();
+                        lastY = e.getY();
+                    }
+                } else if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) {
+                    dragging = false;
+                }
+                return true;
+            }
+        });
         root.addView(sv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
         ScrollView scroll = new ScrollView(this);
@@ -100,7 +148,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         root.addView(scroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1.3f));
         setContentView(root);
 
-        log("Rigs of Rods Mobile 0.3 (teste do OGRE)");
+        log("Rigs of Rods Mobile 0.4 (cena 3D leve: arraste = girar, pinca = zoom)");
         log("Aparelho: " + Build.MANUFACTURER + " " + Build.MODEL
                 + " | Android " + Build.VERSION.RELEASE + " (API " + Build.VERSION.SDK_INT + ")"
                 + " | ABIs: " + Arrays.toString(Build.SUPPORTED_ABIS));
