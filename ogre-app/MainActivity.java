@@ -126,6 +126,15 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
             log(last);
             log("--- fim do log salvo ---");
         }
+        String og = readFile(new File(getFilesDir(), "ogre_log.txt.ogre.log"));
+        if (og != null && og.length() > 0) {
+            if (og.length() > 1800) {
+                og = og.substring(og.length() - 1800);
+            }
+            log("--- Log interno do OGRE (final) ---");
+            log(og);
+            log("--- fim do log do OGRE ---");
+        }
 
         b1.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -318,4 +327,3 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
     }
 }
 // FIM_DO_ARQUIVO
-                
