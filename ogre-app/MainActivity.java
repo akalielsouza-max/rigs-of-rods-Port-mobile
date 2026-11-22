@@ -31,6 +31,9 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
     private static native String nativeGetLog();
     private static native void nativeTouch(float dx, float dy);
     private static native void nativeZoom(float factor);
+    private static native String nativeRorStart(Surface s, String baseDir, String logPath);
+    private static native void nativeRorStop();
+    private static native String nativeRorGetLog();
 
     private TextView out;
     private TextView ogreOut;
@@ -38,6 +41,8 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
     private Surface surface;
     private boolean ogreRunning = false;
     private boolean renderLibLoaded = false;
+    private boolean rorLibLoaded = false;
+    private int mode = 0; // 0 = nada, 1 = teste do OGRE, 2 = RoR
     private boolean okMarked = false;
     private float lastX;
     private float lastY;
@@ -51,7 +56,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
             if (!ogreRunning) {
                 return;
             }
-            String s = nativeGetLog();
+            String s = (mode == 2) ? nativeRorGetLog() : nativeGetLog();
             if (s.length() > 3500) {
                 s = s.substring(s.length() - 3500);
             }
@@ -89,6 +94,12 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         row.addView(b3, w);
         row.addView(b4, w);
         root.addView(row);
+        LinearLayout row2 = new LinearLayout(this);
+        row2.setOrientation(LinearLayout.HORIZONTAL);
+        Button b5 = new Button(this);
+        b5.setText("Iniciar RoR");
+        row2.addView(b5, w);
+        root.addView(row2);
 
         SurfaceView sv = new SurfaceView(this);
         sv.getHolder().addCallback(this);
@@ -177,6 +188,24 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
             log(last);
             log("--- fim do log salvo ---");
         }
+        String rl = readFile(new File(getFilesDir(), "ror_log.txt"));
+        if (rl != null && rl.length() > 0) {
+            if (rl.length() > 3500) {
+                rl = rl.substring(0, 1500) + "\n[...]\n" + rl.substring(rl.length() - 1800);
+            }
+            log("--- Log salvo do iniciador do RoR ---");
+            log(rl);
+            log("--- fim do log do iniciador ---");
+        }
+        String rorLog = readFile(new File(ContentInstaller.root(this), "user/logs/RoR.log"));
+        if (rorLog != null && rorLog.length() > 0) {
+            if (rorLog.length() > 2000) {
+                rorLog = rorLog.substring(rorLog.length() - 2000);
+            }
+            log("--- RoR.log (final) ---");
+            log(rorLog);
+            log("--- fim do RoR.log ---");
+        }
         String og = readFile(new File(getFilesDir(), "ogre_log.txt.ogre.log"));
         if (og != null && og.length() > 0) {
             if (og.length() > 1800) {
@@ -203,6 +232,12 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
             @Override
             public void onClick(View v) {
                 stopOgre();
+            }
+        });
+        b5.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                startRor();
             }
         });
         b4.setOnClickListener(new View.OnClickListener() {
@@ -277,7 +312,52 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
             return;
         }
         ogreRunning = true;
+        mode = 1;
         log("Iniciando OGRE...");
+        handler.post(poll);
+    }
+
+    private void startRor() {
+        if (ogreRunning) {
+            log("Pare o que esta rodando antes (botao Parar).");
+            return;
+        }
+        if (surface == null || !surface.isValid()) {
+            log("A superficie de video ainda nao esta pronta.");
+            return;
+        }
+        File res = new File(ContentInstaller.root(this), "resources");
+        if (!res.exists()) {
+            log("Instale o conteudo primeiro (botao Conteudo).");
+            return;
+        }
+        try {
+            if (!rorLibLoaded) {
+                System.loadLibrary("RoR");
+                rorLibLoaded = true;
+            }
+        } catch (Throwable t) {
+            log("ERRO ao carregar libRoR.so: " + t);
+            return;
+        }
+        okMarked = false;
+        write("ROR_STARTED");
+        try {
+            String err = nativeRorStart(surface, ContentInstaller.root(this).getPath(),
+                    new File(getFilesDir(), "ror_log.txt").getPath());
+            if (err != null && err.length() > 0) {
+                log("ERRO: " + err);
+                write("ERRO: " + err);
+                return;
+            }
+        } catch (Throwable t) {
+            log("ERRO: " + t);
+            write("ERRO: " + t);
+            return;
+        }
+        ogreRunning = true;
+        mode = 2;
+        log("Iniciando o RoR...");
         handler.post(poll);
     }
 
@@ -288,8 +368,13 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         ogreRunning = false;
         handler.removeCallbacks(poll);
         try {
-            nativeStop();
-            ogreOut.setText(nativeGetLog());
+            if (mode == 2) {
+                nativeRorStop();
+                ogreOut.setText(nativeRorGetLog());
+            } else {
+                nativeStop();
+                ogreOut.setText(nativeGetLog());
+            }
         } catch (Throwable t) {
             log("ERRO ao parar: " + t);
         }
@@ -400,3 +485,4 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
     }
 }
 // FIM_DO_ARQUIVO
+            
