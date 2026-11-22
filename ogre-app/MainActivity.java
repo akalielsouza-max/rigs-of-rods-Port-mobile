@@ -24,7 +24,7 @@ import java.util.Arrays;
 import java.util.List;
 
 public class MainActivity extends Activity implements SurfaceHolder.Callback {
-    private static native String nativeStart(Surface s);
+    private static native String nativeStart(Surface s, String logPath);
     private static native void nativeStop();
     private static native String nativeGetLog();
 
@@ -117,6 +117,16 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         }
         showExitReasons();
 
+        String last = readFile(new File(getFilesDir(), "ogre_log.txt"));
+        if (last != null && last.length() > 0) {
+            if (last.length() > 3000) {
+                last = last.substring(last.length() - 3000);
+            }
+            log("--- Log salvo da ultima tentativa do OGRE ---");
+            log(last);
+            log("--- fim do log salvo ---");
+        }
+
         b1.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -173,7 +183,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         okMarked = false;
         write("OGRE_STARTED");
         try {
-            String err = nativeStart(surface);
+            String err = nativeStart(surface, new File(getFilesDir(), "ogre_log.txt").getPath());
             if (err != null && err.length() > 0) {
                 log("ERRO: " + err);
                 write("ERRO: " + err);
@@ -277,6 +287,21 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         }
     }
 
+    private String readFile(File file) {
+        try {
+            if (!file.exists()) {
+                return null;
+            }
+            FileInputStream f = new FileInputStream(file);
+            byte[] b = new byte[(int) file.length()];
+            int n = f.read(b);
+            f.close();
+            return new String(b, 0, Math.max(n, 0), "UTF-8");
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
     private String read() {
         try {
             if (!statusFile.exists()) {
@@ -293,4 +318,4 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
     }
 }
 // FIM_DO_ARQUIVO
-          
+    
