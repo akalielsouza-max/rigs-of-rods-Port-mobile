@@ -119,8 +119,8 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
 
         String last = readFile(new File(getFilesDir(), "ogre_log.txt"));
         if (last != null && last.length() > 0) {
-            if (last.length() > 3000) {
-                last = last.substring(last.length() - 3000);
+            if (last.length() > 3500) {
+                last = last.substring(0, 2200) + "\n[...]\n" + last.substring(last.length() - 1200);
             }
             log("--- Log salvo da ultima tentativa do OGRE ---");
             log(last);
@@ -318,4 +318,4 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
     }
 }
 // FIM_DO_ARQUIVO
-    
+                
