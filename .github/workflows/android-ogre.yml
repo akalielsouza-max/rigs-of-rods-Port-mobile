@@ -14,7 +14,7 @@ jobs:
 
       - name: Conferir arquivos do app (detecta arquivo cortado ao colar)
         run: |
-          for f in ogre-app/ror_render.cpp ogre-app/MainActivity.java ogre-app/ContentInstaller.java; do
+          for f in ogre-app/ror_render.cpp ogre-app/MainActivity.java ogre-app/ContentInstaller.java ogre-app/ror_android.cpp ogre-app/build_ror.sh; do
             if [ ! -f "$f" ]; then echo "ERRO: falta o arquivo $f no repositorio"; exit 1; fi
             if ! tail -n 3 "$f" | grep -q FIM_DO_ARQUIVO; then echo "ERRO: $f esta incompleto (cortado ao colar). Cole de novo."; exit 1; fi
             wc -c "$f"
@@ -90,6 +90,11 @@ jobs:
           } | tee -a "$GITHUB_STEP_SUMMARY"
           test -f build-ogre/libRoRRender.so
 
+      - name: Compilar libRoR.so (RoR com patches Android)
+        id: s_ror
+        continue-on-error: true
+        run: bash ogre-app/build_ror.sh
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -115,6 +120,11 @@ jobs:
           "$TC/bin/llvm-strip" --strip-unneeded "$JNI/libRoRRender.so"
           if grep -q "libc++_shared.so" needed.txt; then
             cp "$TC/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so" "$JNI/"
+          fi
+          if [ -f build-ror/libRoR.so ]; then
+            "$TC/bin/llvm-readelf" -d build-ror/libRoR.so | grep NEEDED | tee -a "$GITHUB_STEP_SUMMARY"
+            cp build-ror/libRoR.so "$JNI/libRoR.so"
+            "$TC/bin/llvm-strip" --strip-unneeded "$JNI/libRoR.so"
           fi
           ls -la "$JNI" | tee -a "$GITHUB_STEP_SUMMARY"
           cd apk-project
@@ -152,8 +162,8 @@ jobs:
                   applicationId 'org.rigsofrods.mobile'
                   minSdk 26
                   targetSdk 34
-                  versionCode 4
-                  versionName '0.4-conteudo'
+                  versionCode 5
+                  versionName '0.5-ror'
                   ndk { abiFilters 'arm64-v8a' }
               }
               packaging {
@@ -193,7 +203,7 @@ jobs:
         run: |
           A="$GITHUB_WORKSPACE/apk-project/app/src/main/assets/ror"
           mkdir -p "$A/resources" "$A/content"
-          git clone -q --depth 1 --branch 2026.01 https://github.com/RigsOfRods/rigs-of-rods.git ror-src
+          [ -d ror-src ] || git clone -q --depth 1 --branch 2026.01 https://github.com/RigsOfRods/rigs-of-rods.git ror-src
           # igual ao CMake do RoR: cada pasta de resources/ vira um .zip (sem sons e wallpapers, que sao grandes e nao servem agora)
           for d in ror-src/resources/*/; do
             n=$(basename "$d")
