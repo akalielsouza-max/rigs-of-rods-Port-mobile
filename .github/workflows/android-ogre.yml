@@ -1,0 +1,454 @@
+# android-ogre: gera APENAS a libRoRRender.so (teste do OGRE/GLES2) e um APK de teste. Independente do android-link.
+# Precisa do cache android-sysroot-v2 (criado pelo android-deps). EXPERIMENTAL / NAO TESTADO.
+name: android-ogre
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  ogre:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Instalar NDK r26d
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;26.3.11579264" > /dev/null
+          echo "NDK_DIR=$ANDROID_HOME/ndk/26.3.11579264" >> "$GITHUB_ENV"
+          echo "PREFIX=$GITHUB_WORKSPACE/sysroot" >> "$GITHUB_ENV"
+          echo "CXX=$ANDROID_HOME/ndk/26.3.11579264/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang++" >> "$GITHUB_ENV"
+          echo "CC=$ANDROID_HOME/ndk/26.3.11579264/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang" >> "$GITHUB_ENV"
+
+      - name: Restaurar sysroot (cache do android-deps)
+        id: sysroot
+        uses: actions/cache/restore@v4
+        with:
+          path: sysroot
+          key: android-sysroot-v2
+
+      - name: Verificar sysroot
+        run: |
+          if [ "${{ steps.sysroot.outputs.cache-hit }}" != "true" ]; then
+            echo "ERRO: cache android-sysroot-v2 nao encontrado. Rode o workflow android-deps ate o fim e tente de novo."
+            exit 1
+          fi
+          ls sysroot/include | head -30
+
+      - name: Compilar libRoRRender.so
+        id: s_lib
+        run: |
+          mkdir -p ogre-test
+          { echo "set(SYS_INCS $PREFIX/include"
+            for d in $(find "$PREFIX/include" -mindepth 1 -maxdepth 2 -type d -not -path "*/rapidjson*"); do echo "  $d"; done
+            echo ")"
+          } > ogre-test/incs.cmake
+
+          cat > ogre-test/ror_render.cpp <<'CPP'
+          // Teste minimo: OGRE (GLES2) desenhando numa Surface do Android, em thread propria.
+          #include <jni.h>
+          #include <android/native_window.h>
+          #include <android/native_window_jni.h>
+          #include <android/log.h>
+          #include <GLES2/gl2.h>
+          #include <atomic>
+          #include <chrono>
+          #include <cmath>
+          #include <mutex>
+          #include <stdexcept>
+          #include <string>
+          #include <thread>
+
+          #include <Ogre.h>
+
+          #include <OgrePlugin.h>
+          #if __has_include(<RenderSystems/GLES2/OgreGLES2Plugin.h>)
+          #include <RenderSystems/GLES2/OgreGLES2Plugin.h>
+          #else
+          namespace Ogre {
+              class GLES2RenderSystem;
+              class GLES2Plugin : public Plugin {
+              public:
+                  GLES2Plugin();
+                  const String& getName() const;
+                  void install();
+                  void initialise();
+                  void shutdown();
+                  void uninstall();
+              protected:
+                  GLES2RenderSystem* mRenderSystem;
+              };
+          }
+          #endif
+
+          static std::mutex g_mx;
+          static std::string g_log;
+          static std::atomic<bool> g_stop(false);
+          static std::thread g_thread;
+          static ANativeWindow* g_win = nullptr;
+
+          static void addLog(const std::string& in) {
+              std::string s;
+              for (unsigned char c : in) s += (c < 128 && (c >= 32 || c == '\n')) ? (char)c : '?';
+              __android_log_print(ANDROID_LOG_INFO, "RoRRender", "%s", s.c_str());
+              std::lock_guard<std::mutex> lk(g_mx);
+              g_log += s + "\n";
+              if (g_log.size() > 16000) g_log.erase(0, g_log.size() - 12000);
+          }
+
+          struct Capture : public Ogre::LogListener {
+              void messageLogged(const Ogre::String& m, Ogre::LogMessageLevel, bool, const Ogre::String&, bool&) override {
+                  addLog("[ogre] " + m);
+              }
+          };
+          static Capture g_capture;
+
+          static void renderMain(ANativeWindow* win) {
+              Ogre::LogManager* lm = nullptr;
+              Ogre::Root* root = nullptr;
+              try {
+                  lm = new Ogre::LogManager();
+                  Ogre::Log* l = lm->createLog("ror", true, false, true);
+                  l->addListener(&g_capture);
+
+                  addLog("Criando Ogre::Root...");
+                  root = new Ogre::Root("", "", "");
+                  addLog("Instalando plugin GLES2...");
+                  root->installPlugin(new Ogre::GLES2Plugin());
+                  const Ogre::RenderSystemList& rl = root->getAvailableRenderers();
+                  if (rl.empty()) throw std::runtime_error("nenhum RenderSystem disponivel");
+                  addLog("RenderSystem: " + rl[0]->getName());
+                  root->setRenderSystem(rl[0]);
+                  root->initialise(false);
+
+                  Ogre::NameValuePairList p;
+                  p["externalWindowHandle"] = std::to_string((size_t)win);
+                  addLog("Criando janela de render...");
+                  Ogre::RenderWindow* w = root->createRenderWindow("RoR", 0, 0, false, &p);
+                  addLog("Janela: " + std::to_string(w->getWidth()) + "x" + std::to_string(w->getHeight()));
+                  const GLubyte* r = glGetString(GL_RENDERER);
+                  const GLubyte* v = glGetString(GL_VERSION);
+                  addLog(std::string("GPU: ") + (r ? (const char*)r : "?") + " | GL: " + (v ? (const char*)v : "?"));
+
+                  Ogre::SceneManager* sm = root->createSceneManager();
+                  Ogre::Camera* cam = sm->createCamera("cam");
+                  Ogre::Viewport* vp = w->addViewport(cam);
+                  addLog("Cena criada. Renderizando...");
+
+                  auto t0 = std::chrono::steady_clock::now();
+                  auto tl = t0;
+                  int frames = 0, last = 0;
+                  while (!g_stop) {
+                      float t = std::chrono::duration<float>(std::chrono::steady_clock::now() - t0).count();
+                      vp->setBackgroundColour(Ogre::ColourValue(0.25f + 0.2f * std::sin(t), 0.55f, 0.9f - 0.2f * std::sin(t)));
+                      if (!root->renderOneFrame()) break;
+                      frames++;
+                      if (frames == 30) addLog("FRAMES_OK: o OGRE desenhou 30 quadros");
+                      auto now = std::chrono::steady_clock::now();
+                      if (std::chrono::duration<float>(now - tl).count() >= 2.0f) {
+                          float fps = (frames - last) / std::chrono::duration<float>(now - tl).count();
+                          addLog("FPS: " + std::to_string((int)fps) + " (quadros: " + std::to_string(frames) + ")");
+                          last = frames;
+                          tl = now;
+                      }
+                  }
+              } catch (Ogre::Exception& e) {
+                  addLog("ERRO OGRE: " + e.getFullDescription());
+              } catch (std::exception& e) {
+                  addLog(std::string("ERRO: ") + e.what());
+              } catch (...) {
+                  addLog("ERRO desconhecido");
+              }
+              try {
+                  addLog("Encerrando OGRE...");
+                  delete root;
+                  delete lm;
+              } catch (...) {
+              }
+              addLog("OGRE encerrado.");
+          }
+
+          extern "C" JNIEXPORT jstring JNICALL
+          Java_org_rigsofrods_mobile_MainActivity_nativeStart(JNIEnv* env, jclass, jobject surface) {
+              if (g_thread.joinable()) return env->NewStringUTF("OGRE ja esta rodando");
+              g_win = ANativeWindow_fromSurface(env, surface);
+              if (!g_win) return env->NewStringUTF("ANativeWindow_fromSurface falhou");
+              { std::lock_guard<std::mutex> lk(g_mx); g_log.clear(); }
+              g_stop = false;
+              g_thread = std::thread(renderMain, g_win);
+              return env->NewStringUTF("");
+          }
+
+          extern "C" JNIEXPORT void JNICALL
+          Java_org_rigsofrods_mobile_MainActivity_nativeStop(JNIEnv*, jclass) {
+              g_stop = true;
+              if (g_thread.joinable()) g_thread.join();
+              if (g_win) { ANativeWindow_release(g_win); g_win = nullptr; }
+          }
+
+          extern "C" JNIEXPORT jstring JNICALL
+          Java_org_rigsofrods_mobile_MainActivity_nativeGetLog(JNIEnv* env, jclass) {
+              std::lock_guard<std::mutex> lk(g_mx);
+              return env->NewStringUTF(g_log.c_str());
+          }
+          CPP
+
+          cat > ogre-test/CMakeLists.txt <<'CMK'
+          cmake_minimum_required(VERSION 3.18)
+          project(RoRRender C CXX)
+          set(CMAKE_CXX_STANDARD 17)
+          set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+          include(${CMAKE_SOURCE_DIR}/incs.cmake)
+
+          set(CPUF $ENV{NDK_DIR}/sources/android/cpufeatures)
+          add_library(cpufeatures STATIC ${CPUF}/cpu-features.c)
+          target_include_directories(cpufeatures PUBLIC ${CPUF})
+          target_compile_options(cpufeatures PRIVATE -fPIC -Wno-everything)
+
+          add_library(RoRRender SHARED ${CMAKE_SOURCE_DIR}/ror_render.cpp)
+          foreach(d ${SYS_INCS})
+            target_compile_options(RoRRender PRIVATE "SHELL:-idirafter ${d}")
+          endforeach()
+          target_compile_definitions(RoRRender PRIVATE _LIBCPP_ENABLE_CXX17_REMOVED_AUTO_PTR _LIBCPP_ENABLE_CXX17_REMOVED_UNARY_BINARY_FUNCTION)
+          target_compile_options(RoRRender PRIVATE -fPIC -O1 -g0 -Wno-everything)
+          file(GLOB all_libs ${PREFIX}/lib/*.a)
+          file(GLOB ogre_plugin_libs ${PREFIX}/lib/OGRE/*.a)
+          target_link_options(RoRRender PRIVATE -Wl,--no-undefined -Wl,--error-limit=0 -Wl,-Bsymbolic)
+          target_link_libraries(RoRRender PRIVATE cpufeatures -Wl,--start-group ${ogre_plugin_libs} ${all_libs} -Wl,--end-group android log EGL GLESv2 z dl)
+          CMK
+
+          cmake -S ogre-test -B build-ogre -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release -DPREFIX="$PREFIX" 2>&1 | tail -5
+          cmake --build build-ogre -j"$(nproc)" > build-ogre.log 2>&1 || true
+          {
+          echo "# libRoRRender.so (teste do OGRE)"
+          ls -la build-ogre/libRoRRender.so 2>/dev/null || echo "libRoRRender.so NAO foi gerada"
+          echo "## Erros"
+          grep -a -E "error:|undefined symbol" build-ogre.log | sed 's#^.*/ogre-test/##' | sort -u | head -30 | cut -c1-300
+          echo "## sysroot/lib/OGRE"
+          ls sysroot/lib/OGRE | head -20
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          test -f build-ogre/libRoRRender.so
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
+      - name: Preparar Android SDK
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "platforms;android-34" "build-tools;34.0.0" > /dev/null
+
+      - name: Criar app
+        id: s_app
+        run: |
+          TC="$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64"
+          JNI=apk-project/app/src/main/jniLibs/arm64-v8a
+          mkdir -p "$JNI" apk-project/app/src/main/java/org/rigsofrods/mobile
+          "$TC/bin/llvm-readelf" -d build-ogre/libRoRRender.so | grep NEEDED | tee needed.txt | tee -a "$GITHUB_STEP_SUMMARY"
+          cp build-ogre/libRoRRender.so "$JNI/libRoRRender.so"
+          "$TC/bin/llvm-strip" --strip-unneeded "$JNI/libRoRRender.so"
+          if grep -q "libc++_shared.so" needed.txt; then
+            cp "$TC/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so" "$JNI/"
+          fi
+          ls -la "$JNI" | tee -a "$GITHUB_STEP_SUMMARY"
+          cd apk-project
+
+          cat > settings.gradle <<'EOF'
+          pluginManagement {
+              repositories { google(); mavenCentral(); gradlePluginPortal() }
+          }
+          dependencyResolutionManagement {
+              repositories { google(); mavenCentral() }
+          }
+          rootProject.name = "RoRMobile"
+          include ':app'
+          EOF
+
+          cat > build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application' version '8.5.2' apply false
+          }
+          EOF
+
+          cat > gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx3g
+          android.useAndroidX=false
+          EOF
+
+          cat > app/build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application'
+          }
+          android {
+              namespace 'org.rigsofrods.mobile'
+              compileSdk 34
+              defaultConfig {
+                  applicationId 'org.rigsofrods.mobile'
+                  minSdk 26
+                  targetSdk 34
+                  versionCode 3
+                  versionName '0.3-ogre'
+                  ndk { abiFilters 'arm64-v8a' }
+              }
+              packaging {
+                  jniLibs { useLegacyPackaging = true }
+              }
+          }
+          EOF
+
+          cat > app/src/main/AndroidManifest.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <application
+                  android:label="RoR Mobile"
+                  android:extractNativeLibs="true"
+                  android:theme="@android:style/Theme.NoTitleBar">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:configChanges="orientation|screenSize|keyboardHidden">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          cat > app/src/main/java/org/rigsofrods/mobile/MainActivity.java <<'EOF'
+          package org.rigsofrods.mobile;
+
+          import android.app.Activity;
+          import android.app.ActivityManager;
+          import android.app.ApplicationExitInfo;
+          import android.graphics.Color;
+          import android.os.Build;
+          import android.os.Bundle;
+          import android.os.Handler;
+          import android.os.Looper;
+          import android.view.Surface;
+          import android.view.SurfaceHolder;
+          import android.view.SurfaceView;
+          import android.view.View;
+          import android.view.ViewGroup;
+          import android.widget.Button;
+          import android.widget.LinearLayout;
+          import android.widget.ScrollView;
+          import android.widget.TextView;
+          import java.io.File;
+          import java.io.FileInputStream;
+          import java.io.FileOutputStream;
+          import java.util.Arrays;
+          import java.util.List;
+
+          public class MainActivity extends Activity implements SurfaceHolder.Callback {
+              private static native String nativeStart(Surface s);
+              private static native void nativeStop();
+              private static native String nativeGetLog();
+
+              private TextView out;
+              private TextView ogreOut;
+              private File statusFile;
+              private Surface surface;
+              private boolean ogreRunning = false;
+              private boolean renderLibLoaded = false;
+              private boolean okMarked = false;
+              private final Handler handler = new Handler(Looper.getMainLooper());
+
+              private final Runnable poll = new Runnable() {
+                  @Override
+                  public void run() {
+                      if (!ogreRunning) {
+                          return;
+                      }
+                      String s = nativeGetLog();
+                      if (s.length() > 3500) {
+                          s = s.substring(s.length() - 3500);
+                      }
+                      ogreOut.setText(s);
+                      if (!okMarked && s.contains("FRAMES_OK")) {
+                          okMarked = true;
+                          write("OGRE_OK");
+                      }
+                      handler.postDelayed(this, 500);
+                  }
+              };
+
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+                  statusFile = new File(getFilesDir(), "load_status.txt");
+
+                  LinearLayout root = new LinearLayout(this);
+                  root.setOrientation(LinearLayout.VERTICAL);
+                  root.setBackgroundColor(Color.rgb(20, 24, 30));
+                  root.setPadding(24, 48, 24, 24);
+
+                  LinearLayout row = new LinearLayout(this);
+                  row.setOrientation(LinearLayout.HORIZONTAL);
+                  Button b1 = new Button(this);
+                  b1.setText("Carregar RoR");
+                  Button b2 = new Button(this);
+                  b2.setText("Iniciar OGRE");
+                  Button b3 = new Button(this);
+                  b3.setText("Parar");
+                  LinearLayout.LayoutParams w = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+                  row.addView(b2, w);
+                  row.addView(b3, w);
+                  root.addView(row);
+
+                  SurfaceView sv = new SurfaceView(this);
+                  sv.getHolder().addCallback(this);
+                  root.addView(sv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
+                  ScrollView scroll = new ScrollView(this);
+                  LinearLayout box = new LinearLayout(this);
+                  box.setOrientation(LinearLayout.VERTICAL);
+                  out = new TextView(this);
+                  out.setTextColor(Color.WHITE);
+                  out.setTextSize(12f);
+                  out.setTextIsSelectable(true);
+                  ogreOut = new TextView(this);
+                  ogreOut.setTextColor(Color.rgb(160, 230, 160));
+                  ogreOut.setTextSize(12f);
+                  ogreOut.setTextIsSelectable(true);
+                  box.addView(out);
+                  box.addView(ogreOut);
+                  scroll.addView(box);
+                  root.addView(scroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1.3f));
+                  setContentView(root);
+
+                  log("Rigs of Rods Mobile 0.3 (teste do OGRE)");
+                  log("Aparelho: " + Build.MANUFACTURER + " " + Build.MODEL
+                          + " | Android " + Build.VERSION.RELEASE + " (API " + Build.VERSION.SDK_INT + ")"
+                          + " | ABIs: " + Arrays.toString(Build.SUPPORTED_ABIS));
+
+                  String prev = read();
+                  if ("STARTED".equals(prev)) {
+                      log("ATENCAO: a tentativa anterior de carregar a libRoR.so TRAVOU o app (crash nativo).");
+                  } else if ("OGRE_STARTED".equals(prev)) {
+                      log("ATENCAO: a tentativa anterior de iniciar o OGRE TRAVOU o app (crash nativo).");
+                  } else if ("OGRE_OK".equals(prev)) {
+                      log("Tentativa anterior: o OGRE desenhou quadros normalmente.");
+                  } else if (prev != null) {
+                      log("Resultado da tentativa anterior: " + prev);
+                  }
+                  showExitReasons();
+
+                  b1.setOnClickListener(new View.OnClickListener() {
+                      @Override
+                      public void onClick(View v) {
+                          tryLoadRoR();
+                      }
+                  });
+                  b2.setOnClickListener(new View.OnClickListener() {
+                      @Override
+                      public void onClick(View v) {
+                          startOgre();
+                      }
+                  });
+        
