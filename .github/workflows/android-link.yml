@@ -130,7 +130,7 @@ jobs:
           target_link_options(RoRRender PRIVATE -Wl,--no-undefined -Wl,--error-limit=0 -Wl,-Bsymbolic)
           # os plugins estaticos do OGRE (RenderSystem GLES2) ficam em lib/OGRE/, fora do lib/*.a
           file(GLOB ogre_plugin_libs ${PREFIX}/lib/OGRE/*.a)
-          target_link_libraries(RoRRender PRIVATE -Wl,--start-group ${ogre_plugin_libs} ${all_libs} -Wl,--end-group android log EGL GLESv2 z dl)
+          target_link_libraries(RoRRender PRIVATE cpufeatures -Wl,--start-group ${ogre_plugin_libs} ${all_libs} -Wl,--end-group android log EGL GLESv2 z dl)
           CMK
 
           cat > link-test/ror_render.cpp <<'CPP'
@@ -402,4 +402,4 @@ jobs:
 
           cat > app/build.gradle <<'EOF'
           plugins {
-              id 'c
+       
