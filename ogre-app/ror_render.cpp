@@ -5,6 +5,14 @@
 #include <android/log.h>
 #include <GLES2/gl2.h>
 #include <atomic>
+#include <csignal>
+#include <cstdio>
+#include <cstdint>
+#include <cstring>
+#include <dlfcn.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <unwind.h>
 #include <chrono>
 #include <cmath>
 #include <mutex>
@@ -39,6 +47,49 @@ static std::string g_log;
 static std::atomic<bool> g_stop(false);
 static std::thread g_thread;
 static ANativeWindow* g_win = nullptr;
+static char g_logPath[512] = {0};
+
+// ---- registra em arquivo o que o app estava fazendo quando um crash nativo acontece ----
+struct BT { int n; void* pcs[40]; };
+static _Unwind_Reason_Code unwindCb(struct _Unwind_Context* c, void* arg) {
+    BT* b = (BT*)arg;
+    if (b->n < 40) b->pcs[b->n++] = (void*)_Unwind_GetIP(c);
+    return _URC_NO_REASON;
+}
+static void crashHandler(int sig, siginfo_t* si, void*) {
+    int fd = open(g_logPath, O_WRONLY | O_APPEND | O_CREAT, 0644);
+    if (fd >= 0) {
+        char buf[600];
+        int n = snprintf(buf, sizeof buf, "CRASH: sinal=%d endereco=%p\n", sig, si ? si->si_addr : nullptr);
+        write(fd, buf, n);
+        BT b; b.n = 0;
+        _Unwind_Backtrace(unwindCb, &b);
+        for (int i = 0; i < b.n; i++) {
+            Dl_info d;
+            if (dladdr(b.pcs[i], &d)) {
+                const char* lib = d.dli_fname ? strrchr(d.dli_fname, '/') : nullptr;
+                n = snprintf(buf, sizeof buf, "  #%d %s+0x%lx (%s)\n", i, d.dli_sname ? d.dli_sname : "?",
+                             d.dli_saddr ? (unsigned long)((uintptr_t)b.pcs[i] - (uintptr_t)d.dli_saddr) : 0UL,
+                             lib ? lib + 1 : "?");
+            } else {
+                n = snprintf(buf, sizeof buf, "  #%d %p\n", i, b.pcs[i]);
+            }
+            write(fd, buf, n);
+        }
+        close(fd);
+    }
+}
+static void installCrashHandlers() {
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_sigaction = crashHandler;
+    sa.sa_flags = SA_SIGINFO | SA_RESETHAND;
+    sigaction(SIGSEGV, &sa, nullptr);
+    sigaction(SIGABRT, &sa, nullptr);
+    sigaction(SIGBUS, &sa, nullptr);
+    sigaction(SIGFPE, &sa, nullptr);
+    sigaction(SIGILL, &sa, nullptr);
+}
 
 static void addLog(const std::string& in) {
     std::string s;
@@ -46,6 +97,10 @@ static void addLog(const std::string& in) {
     __android_log_print(ANDROID_LOG_INFO, "RoRRender", "%s", s.c_str());
     std::lock_guard<std::mutex> lk(g_mx);
     g_log += s + "\n";
+    if (g_logPath[0]) {
+        FILE* f = fopen(g_logPath, "a");
+        if (f) { fputs(s.c_str(), f); fputc('\n', f); fclose(f); }
+    }
     if (g_log.size() > 16000) g_log.erase(0, g_log.size() - 12000);
 }
 
@@ -60,29 +115,35 @@ static void renderMain(ANativeWindow* win) {
     Ogre::LogManager* lm = nullptr;
     Ogre::Root* root = nullptr;
     try {
+        addLog("Passo 1: criando LogManager...");
         lm = new Ogre::LogManager();
         Ogre::Log* l = lm->createLog("ror", true, false, true);
         l->addListener(&g_capture);
+        addLog("Passo 1 ok");
 
-        addLog("Criando Ogre::Root...");
+        addLog("Passo 2: criando Ogre::Root...");
         root = new Ogre::Root("", "", "");
-        addLog("Instalando plugin GLES2...");
+        addLog("Passo 2 ok. Passo 3: instalando plugin GLES2...");
         root->installPlugin(new Ogre::GLES2Plugin());
+        addLog("Passo 3 ok");
         const Ogre::RenderSystemList& rl = root->getAvailableRenderers();
         if (rl.empty()) throw std::runtime_error("nenhum RenderSystem disponivel");
         addLog("RenderSystem: " + rl[0]->getName());
         root->setRenderSystem(rl[0]);
+        addLog("Passo 4: root->initialise...");
         root->initialise(false);
+        addLog("Passo 4 ok");
 
         Ogre::NameValuePairList p;
         p["externalWindowHandle"] = std::to_string((size_t)win);
-        addLog("Criando janela de render...");
+        addLog("Passo 5: criando janela de render (EGL)...");
         Ogre::RenderWindow* w = root->createRenderWindow("RoR", 0, 0, false, &p);
         addLog("Janela: " + std::to_string(w->getWidth()) + "x" + std::to_string(w->getHeight()));
         const GLubyte* r = glGetString(GL_RENDERER);
         const GLubyte* v = glGetString(GL_VERSION);
         addLog(std::string("GPU: ") + (r ? (const char*)r : "?") + " | GL: " + (v ? (const char*)v : "?"));
 
+        addLog("Passo 5 ok. Passo 6: criando cena...");
         Ogre::SceneManager* sm = root->createSceneManager();
         Ogre::Camera* cam = sm->createCamera("cam");
         Ogre::Viewport* vp = w->addViewport(cam);
@@ -122,8 +183,18 @@ static void renderMain(ANativeWindow* win) {
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_org_rigsofrods_mobile_MainActivity_nativeStart(JNIEnv* env, jclass, jobject surface) {
+Java_org_rigsofrods_mobile_MainActivity_nativeStart(JNIEnv* env, jclass, jobject surface, jstring logPath) {
     if (g_thread.joinable()) return env->NewStringUTF("OGRE ja esta rodando");
+    if (logPath) {
+        const char* p = env->GetStringUTFChars(logPath, nullptr);
+        if (p) {
+            strncpy(g_logPath, p, sizeof(g_logPath) - 1);
+            env->ReleaseStringUTFChars(logPath, p);
+            FILE* f = fopen(g_logPath, "w");
+            if (f) fclose(f);
+        }
+    }
+    installCrashHandlers();
     g_win = ANativeWindow_fromSurface(env, surface);
     if (!g_win) return env->NewStringUTF("ANativeWindow_fromSurface falhou");
     { std::lock_guard<std::mutex> lk(g_mx); g_log.clear(); }
