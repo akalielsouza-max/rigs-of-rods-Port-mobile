@@ -82,9 +82,12 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         b2.setText("Iniciar OGRE");
         Button b3 = new Button(this);
         b3.setText("Parar");
+        Button b4 = new Button(this);
+        b4.setText("Conteudo");
         LinearLayout.LayoutParams w = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
         row.addView(b2, w);
         row.addView(b3, w);
+        row.addView(b4, w);
         root.addView(row);
 
         SurfaceView sv = new SurfaceView(this);
@@ -200,6 +203,28 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
             @Override
             public void onClick(View v) {
                 stopOgre();
+            }
+        });
+        b4.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                log("Instalando o conteudo do RoR (pode levar um minuto)...");
+                new Thread(new Runnable() {
+                    @Override
+                    public void run() {
+                        ContentInstaller.install(MainActivity.this, new ContentInstaller.Out() {
+                            @Override
+                            public void line(final String s) {
+                                runOnUiThread(new Runnable() {
+                                    @Override
+                                    public void run() {
+                                        log(s);
+                                    }
+                                });
+                            }
+                        });
+                    }
+                }).start();
             }
         });
     }
