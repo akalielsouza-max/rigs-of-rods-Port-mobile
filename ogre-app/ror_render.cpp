@@ -116,17 +116,15 @@ struct Capture : public Ogre::LogListener {
 static Capture g_capture;
 
 static void renderMain(ANativeWindow* win) {
-    Ogre::LogManager* lm = nullptr;
     Ogre::Root* root = nullptr;
     try {
-        addLog("Passo 1: criando LogManager...");
-        lm = new Ogre::LogManager();
-        Ogre::Log* l = lm->createLog("ror", true, false, true);
-        l->addListener(&g_capture);
-        addLog("Passo 1 ok");
+        // OGRE 1.11 no Android falha (ponteiro nulo) se o LogManager for criado antes do Root:
+        // por isso quem cria o LogManager e o proprio Root.
+        addLog("Passo 1: preparando (o LogManager sera criado pelo Root)");
 
         addLog("Passo 2: criando Ogre::Root...");
-        root = new Ogre::Root("", "", "");
+        root = new Ogre::Root("", "", std::string(g_logPath) + ".ogre.log");
+        Ogre::LogManager::getSingleton().getDefaultLog()->addListener(&g_capture);
         addLog("Passo 2 ok. Passo 3: instalando plugin GLES2...");
         root->installPlugin(new Ogre::GLES2Plugin());
         addLog("Passo 3 ok");
@@ -184,7 +182,6 @@ static void renderMain(ANativeWindow* win) {
     try {
         addLog("Encerrando OGRE...");
         delete root;
-        delete lm;
     } catch (...) {
     }
     addLog("OGRE encerrado.");
