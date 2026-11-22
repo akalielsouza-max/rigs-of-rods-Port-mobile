@@ -128,7 +128,9 @@ jobs:
           target_compile_definitions(RoRRender PRIVATE _LIBCPP_ENABLE_CXX17_REMOVED_AUTO_PTR _LIBCPP_ENABLE_CXX17_REMOVED_UNARY_BINARY_FUNCTION)
           target_compile_options(RoRRender PRIVATE -fPIC -O1 -g0 -Wno-everything)
           target_link_options(RoRRender PRIVATE -Wl,--no-undefined -Wl,--error-limit=0 -Wl,-Bsymbolic)
-          target_link_libraries(RoRRender PRIVATE -Wl,--start-group ${all_libs} -Wl,--end-group android log EGL GLESv2 z dl)
+          # os plugins estaticos do OGRE (RenderSystem GLES2) ficam em lib/OGRE/, fora do lib/*.a
+          file(GLOB ogre_plugin_libs ${PREFIX}/lib/OGRE/*.a)
+          target_link_libraries(RoRRender PRIVATE -Wl,--start-group ${ogre_plugin_libs} ${all_libs} -Wl,--end-group android log EGL GLESv2 z dl)
           CMK
 
           cat > link-test/ror_render.cpp <<'CPP'
@@ -148,8 +150,9 @@ jobs:
 
           #include <Ogre.h>
 
-          #if __has_include("OgreGLES2Plugin.h")
-          #include "OgreGLES2Plugin.h"
+          #include <OgrePlugin.h>
+          #if __has_include(<RenderSystems/GLES2/OgreGLES2Plugin.h>)
+          #include <RenderSystems/GLES2/OgreGLES2Plugin.h>
           #else
           namespace Ogre {
               class GLES2RenderSystem;
@@ -302,6 +305,8 @@ jobs:
           awk '/Linking CXX shared library libRoRRender.so/{f=1} f' build-link.log | grep -a "undefined symbol" | sed 's/.*undefined symbol: //' | sort -u | head -25 | cut -c1-200
           echo "## Bibliotecas OGRE no sysroot"
           ls sysroot/lib | grep -i -E "ogre|rendersystem|glsupport" | head -30
+          echo "## sysroot/lib/OGRE"
+          ls sysroot/lib/OGRE | head -30
           echo "## Cabecalho OgreGLES2Plugin.h"
           find sysroot/include -name 'OgreGLES2Plugin.h' | head -3
           } | tee report-render.md >> "$GITHUB_STEP_SUMMARY"
@@ -397,14 +402,4 @@ jobs:
 
           cat > app/build.gradle <<'EOF'
           plugins {
-              id 'com.android.application'
-          }
-          android {
-              namespace 'org.rigsofrods.mobile'
-              compileSdk 34
-              defaultConfig {
-                  applicationId 'org.rigsofrods.mobile'
-                  minSdk 26
-                  targetSdk 34
-                  versionCode 3
-                  vers
+              id 'c
