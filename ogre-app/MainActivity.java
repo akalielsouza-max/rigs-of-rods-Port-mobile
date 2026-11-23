@@ -31,7 +31,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
     private static native String nativeGetLog();
     private static native void nativeTouch(float dx, float dy);
     private static native void nativeZoom(float factor);
-    private static native String nativeRorStart(Surface s, String baseDir, String logPath);
+    private static native String nativeRorStart(Surface s, String baseDir, String logPath, int level);
     private static native void nativeRorStop();
     private static native String nativeRorGetLog();
 
@@ -97,8 +97,11 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         LinearLayout row2 = new LinearLayout(this);
         row2.setOrientation(LinearLayout.HORIZONTAL);
         Button b5 = new Button(this);
-        b5.setText("Iniciar RoR");
+        b5.setText("RoR (cena)");
+        Button b6 = new Button(this);
+        b6.setText("RoR (+GUI)");
         row2.addView(b5, w);
+        row2.addView(b6, w);
         root.addView(row2);
 
         SurfaceView sv = new SurfaceView(this);
@@ -237,7 +240,13 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         b5.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                startRor();
+                startRor(1);
+            }
+        });
+        b6.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                startRor(2);
             }
         });
         b4.setOnClickListener(new View.OnClickListener() {
@@ -317,7 +326,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         handler.post(poll);
     }
 
-    private void startRor() {
+    private void startRor(int level) {
         if (ogreRunning) {
             log("Pare o que esta rodando antes (botao Parar).");
             return;
@@ -344,7 +353,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         write("ROR_STARTED");
         try {
             String err = nativeRorStart(surface, ContentInstaller.root(this).getPath(),
-                    new File(getFilesDir(), "ror_log.txt").getPath());
+                    new File(getFilesDir(), "ror_log.txt").getPath(), level);
             if (err != null && err.length() > 0) {
                 log("ERRO: " + err);
                 write("ERRO: " + err);
@@ -485,4 +494,4 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
     }
 }
 // FIM_DO_ARQUIVO
-            
+                    
