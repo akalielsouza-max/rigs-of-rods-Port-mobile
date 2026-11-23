@@ -46,7 +46,23 @@ edit("Application.cpp", p_log)
 
 # 4) AppContext.cpp: log, plugin GLES2 estatico e janela vinda do app
 def p_app(s):
-    s = s.replace('#include "AppContext.h"', '#include "AppContext.h"\n#include <RenderSystems/GLES2/OgreGLES2Plugin.h>\nextern size_t g_ror_android_window;', 1)
+    inc = """#include "AppContext.h"
+#include <RenderSystems/GLES2/OgreGLES2Plugin.h>
+#if __has_include(<Plugins/STBICodec/OgreSTBICodec.h>)
+#include <Plugins/STBICodec/OgreSTBICodec.h>
+#else
+namespace Ogre { class STBIImageCodec { public: static void startup(void); }; }
+#endif
+#if __has_include(<Plugins/ParticleFX/OgreParticleFXPlugin.h>)
+#include <Plugins/ParticleFX/OgreParticleFXPlugin.h>
+#else
+#include <OgrePlugin.h>
+#include <OgreParticleAffectorFactory.h>
+#include <OgreParticleEmitterFactory.h>
+namespace Ogre { class ParticleFXPlugin : public Plugin { public: ParticleFXPlugin(); const String& getName() const; void install(); void initialise(); void shutdown(); void uninstall(); protected: std::vector<ParticleEmitterFactory*> mEmitterFactories; std::vector<ParticleAffectorFactory*> mAffectorFactories; }; }
+#endif
+extern size_t g_ror_android_window;"""
+    s = s.replace('#include "AppContext.h"', inc, 1)
     # LogManager: no Android quem cria e o Ogre::Root (senao o Root quebra com ponteiro nulo)
     s2 = re.sub(r"auto ogre_log_manager = OGRE_NEW Ogre::LogManager\(\);.*?rorlog->addListener\(App::GetConsole\(\)\);[^\n]*",
                 "// Android: o LogManager e criado pelo Ogre::Root em SetUpRendering", s, flags=re.S)
@@ -55,7 +71,7 @@ def p_app(s):
                 r'm_ogre_root = new Ogre::Root("", cfg_filepath, log_filepath);\n\1Ogre::LogManager::getSingleton().getDefaultLog()->addListener(App::GetConsole());', s)
     must(s2 != s, "Root"); s = s2
     s2 = re.sub(r"// load OGRE plugins manually.*?(?=\s*// Load renderer configuration)",
-                "// Android: plugin GLES2 estatico\n    m_ogre_root->installPlugin(new Ogre::GLES2Plugin());\n", s, flags=re.S)
+                "// Android: plugins estaticos (GLES2, codecs PNG/JPG/TGA via STBI, particulas)\n    m_ogre_root->installPlugin(new Ogre::GLES2Plugin());\n    Ogre::STBIImageCodec::startup();\n    m_ogre_root->installPlugin(new Ogre::ParticleFXPlugin());\n", s, flags=re.S)
     must(s2 != s, "plugins"); s = s2
     s2 = s.replace("    // Validate rendering resolution", "    miscParams[\"externalWindowHandle\"] = Ogre::StringConverter::toString(g_ror_android_window);\n    // Validate rendering resolution", 1)
     must(s2 != s, "janela"); return s2
