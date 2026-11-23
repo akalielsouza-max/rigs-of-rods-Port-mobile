@@ -3,6 +3,12 @@
 #include "Application.h"
 #include "AppContext.h"
 #include "Console.h"
+#include "ContentManager.h"
+#include "GfxScene.h"
+#include "CameraManager.h"
+#include "Language.h"
+#include "GUIManager.h"
+#include <Overlay/OgreOverlaySystem.h>
 #include "PlatformUtils.h"
 
 #include <jni.h>
@@ -33,6 +39,7 @@ static char g_path[512] = {0};
 static std::atomic<bool> g_stop(false);
 static std::thread g_thread;
 static ANativeWindow* g_win = nullptr;
+static int g_level = 1; // 1 = ate a cena e a camera; 2 = tambem cria a interface (GUI)
 
 static void addLog(const std::string& in) {
     std::string s;
@@ -124,9 +131,62 @@ static void rorMain(std::string base) {
         Ogre::RenderWindow* w = App::GetAppContext()->GetRenderWindow();
         addLog("R3 ok. Janela: " + std::to_string(w->getWidth()) + "x" + std::to_string(w->getHeight()));
 
-        addLog("R4: desenhando quadros pela janela do RoR...");
         Ogre::Root* root = App::GetAppContext()->GetOgreRoot();
         Ogre::Viewport* vp = App::GetAppContext()->GetViewport();
+
+        addLog("R4: texturas padrao e arquivo de configuracao base (skeleton)...");
+        Ogre::TextureManager::getSingleton().setDefaultNumMipmaps(5);
+        if (!App::GetAppContext()->SetUpConfigSkeleton()) throw std::runtime_error("SetUpConfigSkeleton falhou");
+        Ogre::OverlaySystem* overlay_system = new Ogre::OverlaySystem();
+        addLog("R4 ok");
+
+        addLog("R5: texturas de ambiente (cubo, reflexo, refracao)...");
+        {
+            int res = (int)std::pow(2, std::floor(std::log2((double)w->getWidth())));
+            if (res < 64) res = 64;
+            Ogre::TextureManager::getSingleton().createManual("EnvironmentTexture",
+                Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, Ogre::TEX_TYPE_CUBE_MAP, res / 4, res / 4, 0,
+                Ogre::PF_R8G8B8, Ogre::TU_RENDERTARGET, 0, false, 0);
+            Ogre::TextureManager::getSingleton().createManual("Refraction",
+                Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, Ogre::TEX_TYPE_2D, res / 2, res / 2, 0,
+                Ogre::PF_R8G8B8, Ogre::TU_RENDERTARGET, 0, false, 0);
+            Ogre::TextureManager::getSingleton().createManual("Reflection",
+                Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, Ogre::TEX_TYPE_2D, res / 2, res / 2, 0,
+                Ogre::PF_R8G8B8, Ogre::TU_RENDERTARGET, 0, false, 0);
+        }
+        addLog("R5 ok");
+
+        addLog("R6: pacotes de recursos (flags, fonts, icons, ogrecore, wallpapers, scripts)...");
+        App::GetContentManager()->AddResourcePack(ContentManager::ResourcePack::FLAGS);
+        App::GetContentManager()->AddResourcePack(ContentManager::ResourcePack::FONTS);
+        App::GetContentManager()->AddResourcePack(ContentManager::ResourcePack::ICONS);
+        App::GetContentManager()->AddResourcePack(ContentManager::ResourcePack::OGRE_CORE);
+        App::GetContentManager()->AddResourcePack(ContentManager::ResourcePack::WALLPAPERS);
+        App::GetContentManager()->AddResourcePack(ContentManager::ResourcePack::SCRIPTS);
+        addLog("R6 ok. Idioma e comandos...");
+#ifndef NOLANG
+        App::GetLanguageEngine()->setup();
+#endif
+        App::GetConsole()->regBuiltinCommands();
+        addLog("R6 ok. InitContentManager (materiais, MyGUI, sons) - pode demorar...");
+        App::GetContentManager()->InitContentManager();
+        addLog("R6 ok (conteudo inicializado)");
+
+        addLog("R7: cena grafica e camera do RoR...");
+        App::CreateGfxScene();
+        App::GetGfxScene()->GetSceneManager()->addRenderQueueListener(overlay_system);
+        App::CreateCameraManager();
+        addLog("R7 ok. Ambiente (envmap)...");
+        App::GetGfxScene()->GetEnvMap().SetupEnvMap();
+        addLog("R7 ok (cena e camera criadas)");
+
+        if (g_level >= 2) {
+            addLog("R8: interface do RoR (MyGUI + ImGui)...");
+            App::CreateGuiManager();
+            addLog("R8 ok (interface criada)");
+        }
+
+        addLog("R9: desenhando quadros pela janela do RoR...");
         auto t0 = std::chrono::steady_clock::now();
         auto tl = t0;
         int frames = 0, last = 0;
@@ -155,7 +215,8 @@ static void rorMain(std::string base) {
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_org_rigsofrods_mobile_MainActivity_nativeRorStart(JNIEnv* env, jclass, jobject surface, jstring baseDir, jstring logPath) {
+Java_org_rigsofrods_mobile_MainActivity_nativeRorStart(JNIEnv* env, jclass, jobject surface, jstring baseDir, jstring logPath, jint level) {
+    g_level = (int)level;
     if (g_thread.joinable()) return env->NewStringUTF("O RoR ja esta rodando");
     const char* lp = env->GetStringUTFChars(logPath, nullptr);
     strncpy(g_path, lp, sizeof(g_path) - 1);
