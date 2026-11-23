@@ -162,8 +162,8 @@ jobs:
                   applicationId 'org.rigsofrods.mobile'
                   minSdk 26
                   targetSdk 34
-                  versionCode 5
-                  versionName '0.5-ror'
+                  versionCode 6
+                  versionName '0.6-ror'
                   ndk { abiFilters 'arm64-v8a' }
               }
               packaging {
@@ -204,11 +204,15 @@ jobs:
           A="$GITHUB_WORKSPACE/apk-project/app/src/main/assets/ror"
           mkdir -p "$A/resources" "$A/content"
           [ -d ror-src ] || git clone -q --depth 1 --branch 2026.01 https://github.com/RigsOfRods/rigs-of-rods.git ror-src
-          # igual ao CMake do RoR: cada pasta de resources/ vira um .zip (sem sons e wallpapers, que sao grandes e nao servem agora)
+          # igual ao CMake do RoR: cada pasta de resources/ vira um .zip
+          # sons e wallpapers sao grandes: entram so zips "vazios" (o RoR exige que os arquivos existam)
+          mkdir -p vazio && echo placeholder > vazio/.keep
           for d in ror-src/resources/*/; do
             n=$(basename "$d")
-            case "$n" in sounds|wallpapers) continue;; esac
-            (cd "$d" && zip -qr -9 "$A/resources/$n.zip" .)
+            case "$n" in
+              sounds|wallpapers) (cd vazio && zip -qr -9 "$A/resources/$n.zip" .keep) ;;
+              *) (cd "$d" && zip -qr -9 "$A/resources/$n.zip" .) ;;
+            esac
           done
 
           cat > fetch_pack.py <<'PY'
