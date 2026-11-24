@@ -100,8 +100,11 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         b5.setText("RoR (cena)");
         Button b6 = new Button(this);
         b6.setText("RoR (+GUI)");
+        Button b7 = new Button(this);
+        b7.setText("RoR (menu)");
         row2.addView(b5, w);
         row2.addView(b6, w);
+        row2.addView(b7, w);
         root.addView(row2);
 
         SurfaceView sv = new SurfaceView(this);
@@ -241,6 +244,12 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
             @Override
             public void onClick(View v) {
                 startRor(1);
+            }
+        });
+        b7.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                startRor(3);
             }
         });
         b6.setOnClickListener(new View.OnClickListener() {
@@ -494,4 +503,4 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
     }
 }
 // FIM_DO_ARQUIVO
-                    
+            
