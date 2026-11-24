@@ -76,6 +76,38 @@ extern size_t g_ror_android_window;"""
     s2 = s.replace("    // Validate rendering resolution", "    miscParams[\"externalWindowHandle\"] = Ogre::StringConverter::toString(g_ror_android_window);\n    // Validate rendering resolution", 1)
     must(s2 != s, "janela"); return s2
 edit("AppContext.cpp", p_app)
+
+# 5) ImGui: o material "ImGui/material" usa pipeline fixa, que o GLES2 nao tem -> shaders proprios
+def p_imgui(s):
+    code = '''    {   // Android (GLES2): sem pipeline fixa, entao o ImGui usa shaders proprios
+        HighLevelGpuProgramManager& hm = HighLevelGpuProgramManager::getSingleton();
+        if (!hm.resourceExists("ImGui/VS"))
+        {
+            HighLevelGpuProgramPtr vs = hm.createProgram("ImGui/VS", RGN_INTERNAL, "glsles", GPT_VERTEX_PROGRAM);
+            vs->setSource(R"(attribute vec4 vertex;
+attribute vec4 colour;
+attribute vec2 uv0;
+uniform mat4 worldViewProj;
+varying vec4 vColour;
+varying vec2 vUV;
+void main() { gl_Position = worldViewProj * vertex; vColour = colour; vUV = uv0; })");
+            HighLevelGpuProgramPtr fs = hm.createProgram("ImGui/FS", RGN_INTERNAL, "glsles", GPT_FRAGMENT_PROGRAM);
+            fs->setSource(R"(precision mediump float;
+uniform sampler2D tex;
+varying vec4 vColour;
+varying vec2 vUV;
+void main() { gl_FragColor = vColour * texture2D(tex, vUV); })");
+        }
+        mPass->setVertexProgram("ImGui/VS");
+        mPass->setFragmentProgram("ImGui/FS");
+        mPass->getVertexProgramParameters()->setNamedAutoConstant("worldViewProj", GpuProgramParameters::ACT_WORLDVIEWPROJ_MATRIX);
+    }
+'''
+    s2 = re.sub(r"(\n)([ \t]*mMaterial->load\(\);)", lambda m: "\n" + code + m.group(2), s, count=1)
+    must(s2 != s, "imgui material")
+    s2 = s2.replace("#include <OgreMaterialManager.h>", "#include <OgreMaterialManager.h>\n#include <OgreHighLevelGpuProgramManager.h>", 1)
+    return s2
+edit("gui/imgui/OgreImGuiOverlay.cpp", p_imgui)
 print("patches Android aplicados")
 PY
 
