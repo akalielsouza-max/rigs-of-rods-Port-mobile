@@ -9,6 +9,8 @@
 #include "Language.h"
 #include "GUIManager.h"
 #include <Overlay/OgreOverlaySystem.h>
+#include "OgreImGuiOverlay.h"
+#include <imgui.h>
 #include "PlatformUtils.h"
 
 #include <jni.h>
@@ -190,15 +192,40 @@ static void rorMain(std::string base) {
         auto t0 = std::chrono::steady_clock::now();
         auto tl = t0;
         int frames = 0, last = 0;
+        float lastFps = 0.f;
+        auto prev = t0;
+        if (g_level >= 3) {
+            App::app_state->setVal((int)AppState::MAIN_MENU);
+            App::GetGuiManager()->GameMainMenu.SetVisible(true);
+        }
         while (!g_stop) {
             float t = std::chrono::duration<float>(std::chrono::steady_clock::now() - t0).count();
             vp->setBackgroundColour(Ogre::ColourValue(0.2f + 0.15f * std::sin(t), 0.4f, 0.7f - 0.15f * std::sin(t)));
+            if (g_level >= 2) {
+                // o ImGui exige um "novo quadro" antes de cada desenho (o NewImGuiFrame do RoR precisa do OIS, que nao existe aqui)
+                auto nowf = std::chrono::steady_clock::now();
+                float dt = std::chrono::duration<float>(nowf - prev).count();
+                prev = nowf;
+                Ogre::FrameEvent ev;
+                ev.timeSinceLastFrame = dt;
+                Ogre::ImGuiOverlay::NewFrame(ev);
+                if (g_level == 2) {
+                    ImGui::SetNextWindowPos(ImVec2(20.f, 20.f));
+                    ImGui::Begin("RoR Mobile", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
+                    ImGui::Text("ImGui rodando no Android (GLES2)");
+                    ImGui::Text("FPS: %d", (int)lastFps);
+                    ImGui::End();
+                } else {
+                    App::GetGuiManager()->DrawMainMenuGui(); // menu principal do RoR
+                }
+            }
             if (!root->renderOneFrame()) break;
             frames++;
             if (frames == 30) addLog("FRAMES_OK: a janela do RoR desenhou 30 quadros");
             auto now = std::chrono::steady_clock::now();
             if (std::chrono::duration<float>(now - tl).count() >= 2.0f) {
                 float fps = (frames - last) / std::chrono::duration<float>(now - tl).count();
+                lastFps = fps;
                 addLog("FPS: " + std::to_string((int)fps) + " (quadros: " + std::to_string(frames) + ")");
                 last = frames;
                 tl = now;
