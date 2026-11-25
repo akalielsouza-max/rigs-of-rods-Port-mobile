@@ -92,7 +92,13 @@ varying vec4 vColour;
 varying vec2 vUV;
 void main() { gl_Position = worldViewProj * vertex; vColour = colour; vUV = uv0; })");
             HighLevelGpuProgramPtr fs = hm.createProgram("ImGui/FS", RGN_INTERNAL, "glsles", GPT_FRAGMENT_PROGRAM);
-            fs->setSource(R"(precision mediump float;
+            // ROR_IMGUI_DEBUG (so no teste "+GUI"): tudo magenta e sem recorte, para separar problemas de geometria e de textura
+            const bool dbg = getenv("ROR_IMGUI_DEBUG") != nullptr;
+            fs->setSource(dbg ? R"(precision mediump float;
+uniform sampler2D tex;
+varying vec4 vColour;
+varying vec2 vUV;
+void main() { gl_FragColor = vec4(1.0, 0.0, 1.0, 1.0) + 0.0 * vColour * texture2D(tex, vUV); })" : R"(precision mediump float;
 uniform sampler2D tex;
 varying vec4 vColour;
 varying vec2 vUV;
@@ -106,7 +112,9 @@ void main() { gl_FragColor = vColour * texture2D(tex, vUV); })");
     s2 = re.sub(r"(\n)([ \t]*mMaterial->load\(\);)", lambda m: "\n" + code + m.group(2), s, count=1)
     must(s2 != s, "imgui material")
     s2 = s2.replace("#include <OgreMaterialManager.h>", "#include <OgreMaterialManager.h>\n#include <OgreHighLevelGpuProgramManager.h>", 1)
-    return s2
+    s3 = s2.replace("rsys->setScissorTest(true, scissor.left", "rsys->setScissorTest(getenv(\"ROR_IMGUI_DEBUG\") == nullptr, scissor.left", 1)
+    must(s3 != s2, "scissor")
+    return s3
 edit("gui/imgui/OgreImGuiOverlay.cpp", p_imgui)
 print("patches Android aplicados")
 PY
