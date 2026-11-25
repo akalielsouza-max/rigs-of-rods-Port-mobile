@@ -190,6 +190,7 @@ static void rorMain(std::string base) {
 
         if (g_level >= 2) {
             addLog("R8: interface do RoR (MyGUI + ImGui)...");
+            if (g_level == 2) setenv("ROR_IMGUI_DEBUG", "1", 1); // teste "+GUI": shader magenta e sem recorte
             App::CreateGuiManager();
             addLog("R8 ok (interface criada)");
             // diagnostico: os shaders e o material do ImGui compilaram?
