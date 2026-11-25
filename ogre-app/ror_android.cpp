@@ -11,6 +11,7 @@
 #include <Overlay/OgreOverlaySystem.h>
 #include "OgreImGuiOverlay.h"
 #include <OgreHighLevelGpuProgramManager.h>
+#include <OgreHighLevelGpuProgramManager.h>
 #include <OgreMaterialManager.h>
 #include <OgreGpuProgram.h>
 #include <OgreMaterial.h>
@@ -110,6 +111,7 @@ static void installCrashHandlers() {
 static void rorMain(std::string base) {
     using namespace RoR;
     try {
+        addLog("Iniciador RoR: versao 2026-11-25-A (teste magenta no +GUI)");
         addLog("R1: criando as variaveis de configuracao do RoR (cVarSetupBuiltins)...");
         App::GetConsole()->cVarSetupBuiltins();
         App::GetAppContext()->SetUpThreads();
@@ -193,6 +195,13 @@ static void rorMain(std::string base) {
             if (g_level == 2) setenv("ROR_IMGUI_DEBUG", "1", 1); // teste "+GUI": shader magenta e sem recorte
             App::CreateGuiManager();
             addLog("R8 ok (interface criada)");
+            {
+                // prova de que o patch do ImGui esta no build: o shader de debug contem o magenta
+                Ogre::ResourcePtr r = Ogre::HighLevelGpuProgramManager::getSingleton().getByName("ImGui/FS", Ogre::RGN_INTERNAL);
+                Ogre::HighLevelGpuProgramPtr fs = std::static_pointer_cast<Ogre::HighLevelGpuProgram>(r);
+                bool magenta = fs && fs->getSource().find("vec4(1.0, 0.0, 1.0, 1.0)") != std::string::npos;
+                addLog(std::string("PATCH: shader ImGui/FS ") + (fs ? "existe" : "NAO existe") + "; modo magenta = " + (magenta ? "SIM" : "nao"));
+            }
             // diagnostico: os shaders e o material do ImGui compilaram?
             {
                 auto& hm = Ogre::HighLevelGpuProgramManager::getSingleton();
