@@ -10,6 +10,11 @@
 #include "GUIManager.h"
 #include <Overlay/OgreOverlaySystem.h>
 #include "OgreImGuiOverlay.h"
+#include <OgreHighLevelGpuProgramManager.h>
+#include <OgreMaterialManager.h>
+#include <OgreGpuProgram.h>
+#include <OgreMaterial.h>
+#include <OgreTechnique.h>
 #include <imgui.h>
 #include "PlatformUtils.h"
 
@@ -17,6 +22,7 @@
 #include <android/log.h>
 #include <android/native_window.h>
 #include <android/native_window_jni.h>
+#include <GLES2/gl2.h>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -186,6 +192,25 @@ static void rorMain(std::string base) {
             addLog("R8: interface do RoR (MyGUI + ImGui)...");
             App::CreateGuiManager();
             addLog("R8 ok (interface criada)");
+            // diagnostico: os shaders e o material do ImGui compilaram?
+            {
+                auto& hm = Ogre::HighLevelGpuProgramManager::getSingleton();
+                const char* names[2] = {"ImGui/VS", "ImGui/FS"};
+                for (int i = 0; i < 2; i++) {
+                    Ogre::ResourcePtr rp = hm.getByName(names[i], Ogre::RGN_INTERNAL);
+                    if (!rp) { addLog(std::string("DIAG ") + names[i] + ": nao existe"); continue; }
+                    Ogre::GpuProgramPtr g = Ogre::static_pointer_cast<Ogre::GpuProgram>(rp);
+                    addLog(std::string("DIAG ") + names[i] + ": suportado=" + (g->isSupported() ? "sim" : "NAO")
+                           + " erro_de_compilacao=" + (g->hasCompileError() ? "SIM" : "nao"));
+                }
+                Ogre::ResourcePtr mp = Ogre::MaterialManager::getSingleton().getByName("ImGui/material", Ogre::RGN_INTERNAL);
+                if (mp) {
+                    Ogre::MaterialPtr m = Ogre::static_pointer_cast<Ogre::Material>(mp);
+                    addLog("DIAG ImGui/material: tecnicas suportadas=" + std::to_string(m->getSupportedTechniques().size()));
+                } else {
+                    addLog("DIAG ImGui/material: nao existe");
+                }
+            }
         }
 
         addLog("R9: desenhando quadros pela janela do RoR...");
@@ -226,6 +251,22 @@ static void rorMain(std::string base) {
             if (std::chrono::duration<float>(now - tl).count() >= 2.0f) {
                 float fps = (frames - last) / std::chrono::duration<float>(now - tl).count();
                 lastFps = fps;
+                if (g_level >= 2) {
+                    ImGuiIO& io = ImGui::GetIO();
+                    ImDrawData* dd = ImGui::GetDrawData();
+                    addLog("ImGui: tela=" + std::to_string((int)io.DisplaySize.x) + "x" + std::to_string((int)io.DisplaySize.y)
+                           + " listas=" + std::to_string(dd ? dd->CmdListsCount : -1)
+                           + " vertices=" + std::to_string(dd ? dd->TotalVtxCount : -1)
+                           + " indices=" + std::to_string(dd ? dd->TotalIdxCount : -1)
+                           + " erroGL=" + std::to_string((int)glGetError()));
+                }
+                if (g_level >= 2) {
+                    ImDrawData* dd = ImGui::GetDrawData();
+                    ImVec2 ds = ImGui::GetIO().DisplaySize;
+                    addLog("DIAG ImGui: tela=" + std::to_string((int)ds.x) + "x" + std::to_string((int)ds.y)
+                           + " vertices=" + std::to_string(dd ? dd->TotalVtxCount : -1)
+                           + " listas=" + std::to_string(dd ? dd->CmdListsCount : -1));
+                }
                 addLog("FPS: " + std::to_string((int)fps) + " (quadros: " + std::to_string(frames) + ")");
                 last = frames;
                 tl = now;
